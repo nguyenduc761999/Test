@@ -8,16 +8,25 @@ public class PlayerController : MonoBehaviour
     GameObject _characterModel;
     FixedJoystick _fixedJoystick;
     Animator _animController;
+    AudioSource _audioSource;
 
     [SerializeField] float _rangeAttack = 3f;
+    [SerializeField] SoundConfig _soundConfig;
+    [SerializeField, SfxSound] string fireSound;
 
     const float MoveSpeed = 5f;
     const float RotateSpeed = 10f;
     const int EnemyHitBufferSize = 16;
+    const string ShootAnimStateName = "infantry_combat_shoot";
+#if UNITY_EDITOR
+    const string SoundConfigAssetPath = "Assets/Test_Asset/Config/SoundConfig.asset";
+#endif
 
     LayerMask _enemyLayerMask;
     Collider[] _enemyHits;
     int _upperBodyLayerIndex = -1;
+    bool _shootAnimActive;
+    int _lastShootCycleIndex = -1;
 
     void Awake()
     {
@@ -39,6 +48,10 @@ public class PlayerController : MonoBehaviour
 
         _enemyLayerMask = LayerMask.GetMask("Enemy");
         _enemyHits = new Collider[EnemyHitBufferSize];
+
+        _audioSource = GetComponent<AudioSource>();
+        if (_audioSource == null)
+            _audioSource = gameObject.AddComponent<AudioSource>();
     }
 
     void Update()
@@ -68,20 +81,21 @@ public class PlayerController : MonoBehaviour
         if (_animController != null && _upperBodyLayerIndex >= 0)
             _animController.SetLayerWeight(_upperBodyLayerIndex, hasEnemy ? 1f : 0f);
 
-        // Xoay: ưu tiên nhìn Enemy gần nhất, không có thì theo joystick
-        Vector3 lookDirection = Vector3.zero;
+        // Phát SFX 1 lần mỗi khi bắt đầu chu kỳ anim shoot
+        TryPlayFireSoundOnShootStart();
+
+        // Có Enemy trong range: khóa cứng hướng nhìn, không xoay theo di chuyển
         if (hasEnemy)
         {
-            lookDirection = nearestEnemy.position - _characterModel.transform.position;
+            Vector3 lookDirection = nearestEnemy.position - _characterModel.transform.position;
             lookDirection.y = 0f;
+            if (lookDirection.sqrMagnitude > 0.0001f)
+                _characterModel.transform.rotation = Quaternion.LookRotation(lookDirection);
         }
+        // Hết Enemy trong range mới xoay theo hướng di chuyển
         else if (isRunning)
         {
-            lookDirection = new Vector3(horizontal, 0f, vertical);
-        }
-
-        if (lookDirection.sqrMagnitude > 0.0001f)
-        {
+            Vector3 lookDirection = new Vector3(horizontal, 0f, vertical);
             Quaternion targetRotation = Quaternion.LookRotation(lookDirection);
             _characterModel.transform.rotation = Quaternion.Slerp(
                 _characterModel.transform.rotation,
@@ -92,6 +106,64 @@ public class PlayerController : MonoBehaviour
         if (isRunning)
             transform.Translate(new Vector3(horizontal, 0f, vertical) * MoveSpeed * Time.deltaTime, Space.World);
     }
+
+    /// <summary>
+    /// Khi UpperBody bắt đầu (hoặc lặp lại) state shoot thì phát fireSound một lần.
+    /// </summary>
+    void TryPlayFireSoundOnShootStart()
+    {
+        if (_animController == null || _upperBodyLayerIndex < 0)
+            return;
+
+        float layerWeight = _animController.GetLayerWeight(_upperBodyLayerIndex);
+        if (layerWeight <= 0f)
+        {
+            _shootAnimActive = false;
+            return;
+        }
+
+        AnimatorStateInfo stateInfo = _animController.GetCurrentAnimatorStateInfo(_upperBodyLayerIndex);
+        if (!stateInfo.IsName(ShootAnimStateName))
+        {
+            _shootAnimActive = false;
+            return;
+        }
+
+        int cycleIndex = Mathf.FloorToInt(stateInfo.normalizedTime);
+        if (!_shootAnimActive || cycleIndex != _lastShootCycleIndex)
+        {
+            PlayFireSound();
+            _lastShootCycleIndex = cycleIndex;
+        }
+
+        _shootAnimActive = true;
+    }
+
+    void PlayFireSound()
+    {
+        if (_soundConfig == null || _audioSource == null || string.IsNullOrEmpty(fireSound))
+            return;
+
+        SoundEntry entry = _soundConfig.FindSfxByName(fireSound);
+        if (entry == null || entry.Clip == null)
+            return;
+
+        _audioSource.PlayOneShot(entry.Clip, entry.Volume);
+    }
+
+#if UNITY_EDITOR
+    void Reset()
+    {
+        // Gán sẵn SoundConfig mặc định khi gắn component
+        _soundConfig = AssetDatabase.LoadAssetAtPath<SoundConfig>(SoundConfigAssetPath);
+    }
+
+    void OnValidate()
+    {
+        if (_soundConfig == null)
+            _soundConfig = AssetDatabase.LoadAssetAtPath<SoundConfig>(SoundConfigAssetPath);
+    }
+#endif
 
     Transform FindNearestEnemy()
     {
