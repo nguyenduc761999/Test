@@ -3,24 +3,71 @@ using UnityEngine;
 using UnityEditor;
 #endif
 
+[RequireComponent(typeof(CharacterController))]
 public class PlayerController : MonoBehaviour
 {
+    [Header("Config")]
+    [SerializeField] SoundConfig _soundConfig;
+    [SerializeField] UserConfig _userConfig;
+    [SerializeField] WeaponConfig _weaponConfig;
+
     GameObject _characterModel;
     FixedJoystick _fixedJoystick;
     Animator _animController;
     AudioSource _audioSource;
+    CharacterController _characterController;
 
     [SerializeField] float _rangeAttack = 3f;
-    [SerializeField] SoundConfig _soundConfig;
-    [SerializeField, SfxSound] string fireSound;
+    [SerializeField] float rangeGrenade = 8f;
+
+    [SerializeField] Transform gunLocation;
+    Transform fireLocation;
+
+    WeaponEntry _currentWeapon;
+
+    /// <summary>Máu hiện tại — khởi tạo từ UserConfig, trừ khi nhận damage.</summary>
+    [SerializeField] int health;
+
+    /// <summary>VFX khi bị Zombie đánh trúng — spawn tại vị trí Player, xoay ngược hướng tấn công.</summary>
+    [SerializeField] GameObject hitVFX;
+
+    /// <summary>Máu tối đa lúc bắt đầu (sau Load UserConfig).</summary>
+    int _maxHealth = 1;
+
+    /// <summary>Máu hiện tại của Player.</summary>
+    public int Health => health;
+
+    /// <summary>Máu tối đa để UI tính Fill Amount.</summary>
+    public int MaxHealth => _maxHealth;
+
+    /// <summary>Bắn khi health đổi (damage / chết).</summary>
+    public event System.Action HealthChanged;
+
+    [SerializeField] float _ragdollWaitSeconds = 2f;
+    [SerializeField] float _dissolveDuration = 1.5f;
+    [SerializeField] Shader _dissolveShader;
 
     const float MoveSpeed = 5f;
     const float RotateSpeed = 10f;
+    const float GroundStickVelocity = -2f;
     const int EnemyHitBufferSize = 16;
     const string ShootAnimStateName = "infantry_combat_shoot";
+    const string FireSpeedAnimParam = "FireSpeed";
+    const string FireLocationName = "FireLocation";
+    const string PlaneName = "Plane";
+    const float GrenadeSpawnHeight = 1.2f;
+    const int AimRingSegments = 48;
 #if UNITY_EDITOR
     const string SoundConfigAssetPath = "Assets/Test_Asset/Config/SoundConfig.asset";
+    const string UserConfigAssetPath = "Assets/Test_Asset/Config/UserConfig.asset";
+    const string WeaponConfigAssetPath = "Assets/Test_Asset/Config/WeaponConfig.asset";
 #endif
+
+    static readonly int DissolveAmountId = Shader.PropertyToID("_DissolveAmount");
+    static readonly int BaseMapId = Shader.PropertyToID("_BaseMap");
+    static readonly int BaseColorId = Shader.PropertyToID("_BaseColor");
+    static readonly int MainTexId = Shader.PropertyToID("_MainTex");
+    static readonly int ColorId = Shader.PropertyToID("_Color");
 
     LayerMask _enemyLayerMask;
     Collider[] _enemyHits;
@@ -28,8 +75,38 @@ public class PlayerController : MonoBehaviour
     bool _shootAnimActive;
     int _lastShootCycleIndex = -1;
 
+    Rigidbody[] _ragdollBodies;
+    Collider[] _ragdollColliders;
+    Collider[] _rootColliders;
+    Renderer[] _renderers;
+    Material[] _dissolveMaterials;
+    bool _isDead;
+    float _verticalVelocity;
+
+    Camera _mainCamera;
+    bool _grenadeAiming;
+    Vector3 _grenadeAimPoint;
+    float _cachedRangeExplosion = 2.5f;
+    LineRenderer _maxRangeRing;
+    LineRenderer _aoeRing;
+    RaycastHit[] _groundHits;
+
+    /// <summary>Player đã chết (health &lt;= 0).</summary>
+    public bool IsDead => _isDead;
+
     void Awake()
     {
+        // Cache CharacterController — Move() mới va chạm collider (Translate thì xuyên tường)
+        _characterController = GetComponent<CharacterController>();
+        if (_characterController == null)
+            _characterController = gameObject.AddComponent<CharacterController>();
+
+        _characterController.height = 1.8f;
+        _characterController.radius = 0.35f;
+        _characterController.center = new Vector3(0f, 0.9f, 0f);
+        _characterController.skinWidth = 0.08f;
+        _characterController.minMoveDistance = 0f;
+
         // Lấy model con của Character khi vào Play
         Transform character = transform.Find("Character");
         if (character != null && character.childCount > 0)
@@ -40,7 +117,11 @@ public class PlayerController : MonoBehaviour
         {
             _animController = _characterModel.GetComponent<Animator>();
             if (_animController != null)
+            {
                 _upperBodyLayerIndex = _animController.GetLayerIndex("UpperBody");
+                // CharacterController điều khiển vị trí — root motion Y của anim Run sẽ nâng cả player
+                _animController.applyRootMotion = false;
+            }
         }
 
         // Cache FixedJoystick trên scene
@@ -48,15 +129,52 @@ public class PlayerController : MonoBehaviour
 
         _enemyLayerMask = LayerMask.GetMask("Enemy");
         _enemyHits = new Collider[EnemyHitBufferSize];
+        _groundHits = new RaycastHit[16];
+        _mainCamera = Camera.main;
 
         _audioSource = GetComponent<AudioSource>();
         if (_audioSource == null)
             _audioSource = gameObject.AddComponent<AudioSource>();
+
+        // Khôi phục tiến trình rồi gắn súng đầu inventory
+        if (_userConfig != null)
+            _userConfig.Load();
+
+        // Cache ragdoll / renderer giống Zombie để die cùng kiểu
+        _ragdollBodies = GetComponentsInChildren<Rigidbody>();
+        _renderers = GetComponentsInChildren<Renderer>();
+        CacheRagdollColliders();
+        CacheRootColliders();
+        IgnoreRagdollSelfCollision();
+        SetRagdollKinematic(true);
+
+        if (_dissolveShader == null)
+            _dissolveShader = Shader.Find("Custom/EnemyDissolve");
+
+        // health lấy từ UserConfig sau Load
+        health = _userConfig != null ? _userConfig.health : 0;
+        _maxHealth = Mathf.Max(1, health);
+
+        EquipInventoryWeapon();
+
+        if (health <= 0)
+            ApplyDie();
+    }
+
+    void OnApplicationPause(bool pauseStatus)
+    {
+        if (pauseStatus)
+            _userConfig?.Save();
+    }
+
+    void OnApplicationQuit()
+    {
+        _userConfig?.Save();
     }
 
     void Update()
     {
-        if (_characterModel == null)
+        if (_isDead || _characterModel == null)
             return;
 
         float horizontal = 0f;
@@ -81,7 +199,11 @@ public class PlayerController : MonoBehaviour
         if (_animController != null && _upperBodyLayerIndex >= 0)
             _animController.SetLayerWeight(_upperBodyLayerIndex, hasEnemy ? 1f : 0f);
 
-        // Phát SFX 1 lần mỗi khi bắt đầu chu kỳ anim shoot
+        // Có Enemy trong rangeAttack thì bật Shoot, ngược lại tắt
+        if (_animController != null)
+            _animController.SetBool("Shoot", hasEnemy);
+
+        // Phát SFX + VFX mỗi khi bắt đầu chu kỳ anim shoot
         TryPlayFireSoundOnShootStart();
 
         // Có Enemy trong range: khóa cứng hướng nhìn, không xoay theo di chuyển
@@ -103,12 +225,385 @@ public class PlayerController : MonoBehaviour
                 RotateSpeed * Time.deltaTime);
         }
 
-        if (isRunning)
-            transform.Translate(new Vector3(horizontal, 0f, vertical) * MoveSpeed * Time.deltaTime, Space.World);
+        if (_characterController != null)
+        {
+            Vector3 move = Vector3.zero;
+            if (isRunning)
+                move = new Vector3(horizontal, 0f, vertical) * MoveSpeed;
+
+            // Không có gravity thì va đất/zombie/xương ragdoll đẩy Y — bay dần lên trời
+            if (_characterController.isGrounded)
+                _verticalVelocity = GroundStickVelocity;
+            else
+                _verticalVelocity += Physics.gravity.y * Time.deltaTime;
+
+            move.y = _verticalVelocity;
+            _characterController.Move(move * Time.deltaTime);
+        }
+
+        if (_grenadeAiming)
+            RefreshGrenadeAimIndicators();
     }
 
     /// <summary>
-    /// Khi UpperBody bắt đầu (hoặc lặp lại) state shoot thì phát fireSound một lần.
+    /// Bắt đầu aim lựu đạn kiểu Liên Quân (indicator tại Player).
+    /// </summary>
+    public void BeginGrenadeAim()
+    {
+        if (_isDead || _userConfig == null || _userConfig.grenade == null)
+            return;
+
+        if (_mainCamera == null)
+            _mainCamera = Camera.main;
+
+        CacheRangeExplosionFromPrefab();
+        EnsureAimIndicators();
+        _grenadeAiming = true;
+
+        // Chạm nút: aim tại chân Player, kéo mới lệch hướng
+        _grenadeAimPoint = ProjectToGround(transform.position);
+        SetAimIndicatorsVisible(true);
+        RefreshGrenadeAimIndicators();
+    }
+
+    /// <summary>
+    /// Aim theo offset kéo từ tâm nút skill (kiểu Liên Quân):
+    /// kéo trái/phải/lên/xuống trên màn hình → trái/phải/trước/sau theo Camera.
+    /// </summary>
+    public void UpdateGrenadeAimByDrag(Vector2 screenDeltaFromBtn, float maxDragPixels)
+    {
+        if (!_grenadeAiming || _isDead)
+            return;
+
+        if (_mainCamera == null)
+            _mainCamera = Camera.main;
+        if (_mainCamera == null)
+            return;
+
+        float maxPixels = Mathf.Max(1f, maxDragPixels);
+        float dist01 = Mathf.Clamp01(screenDeltaFromBtn.magnitude / maxPixels);
+
+        Vector3 camForward = _mainCamera.transform.forward;
+        camForward.y = 0f;
+        Vector3 camRight = _mainCamera.transform.right;
+        camRight.y = 0f;
+
+        if (camForward.sqrMagnitude < 0.0001f)
+            camForward = Vector3.forward;
+        else
+            camForward.Normalize();
+
+        if (camRight.sqrMagnitude < 0.0001f)
+            camRight = Vector3.right;
+        else
+            camRight.Normalize();
+
+        // screen X → camRight, screen Y → camForward (kéo lên = phía trước camera)
+        Vector3 worldDir = camRight * screenDeltaFromBtn.x + camForward * screenDeltaFromBtn.y;
+        if (worldDir.sqrMagnitude > 0.0001f)
+            worldDir.Normalize();
+        else
+            worldDir = Vector3.zero;
+
+        float throwRange = Mathf.Max(0f, rangeGrenade) * dist01;
+        Vector3 aim = transform.position + worldDir * throwRange;
+        _grenadeAimPoint = ProjectToGround(aim);
+        RefreshGrenadeAimIndicators();
+    }
+
+    /// <summary>
+    /// Hủy aim, ẩn indicator.
+    /// </summary>
+    public void CancelGrenadeAim()
+    {
+        _grenadeAiming = false;
+        SetAimIndicatorsVisible(false);
+    }
+
+    /// <summary>
+    /// Thả tay: ẩn indicator và ném lựu tới điểm aim.
+    /// </summary>
+    public void ConfirmGrenadeThrow()
+    {
+        if (!_grenadeAiming || _isDead)
+        {
+            CancelGrenadeAim();
+            return;
+        }
+
+        Vector3 target = _grenadeAimPoint;
+        CancelGrenadeAim();
+        ThrowGrenade(target);
+    }
+
+    void ThrowGrenade(Vector3 targetWorldPos)
+    {
+        if (_userConfig == null || _userConfig.grenade == null)
+            return;
+
+        Vector3 spawnPos = transform.position + Vector3.up * GrenadeSpawnHeight;
+        Vector3 landing = ProjectToGround(targetWorldPos);
+        // Đảm bảo điểm đáp không trùng spawn (tránh vận tốc NaN / đứng yên)
+        Vector3 flat = landing - spawnPos;
+        flat.y = 0f;
+        if (flat.sqrMagnitude < 0.01f)
+            landing = spawnPos + GetDefaultThrowForward() * 0.5f;
+
+        GameObject instance = Instantiate(_userConfig.grenade, spawnPos, Quaternion.identity);
+        if (instance == null)
+            return;
+
+        GrenadeController controller = instance.GetComponent<GrenadeController>();
+        if (controller == null)
+            controller = instance.AddComponent<GrenadeController>();
+
+        IgnoreGrenadePlayerCollision(instance);
+        controller.Init(landing);
+    }
+
+    Vector3 GetDefaultThrowForward()
+    {
+        if (_characterModel != null)
+        {
+            Vector3 f = _characterModel.transform.forward;
+            f.y = 0f;
+            if (f.sqrMagnitude > 0.0001f)
+                return f.normalized;
+        }
+
+        if (_mainCamera == null)
+            _mainCamera = Camera.main;
+        if (_mainCamera != null)
+        {
+            Vector3 f = _mainCamera.transform.forward;
+            f.y = 0f;
+            if (f.sqrMagnitude > 0.0001f)
+                return f.normalized;
+        }
+
+        return Vector3.forward;
+    }
+
+    void IgnoreGrenadePlayerCollision(GameObject grenade)
+    {
+        if (grenade == null || _characterController == null)
+            return;
+
+        Collider grenadeCol = grenade.GetComponent<Collider>();
+        if (grenadeCol == null)
+            return;
+
+        Physics.IgnoreCollision(grenadeCol, _characterController, true);
+
+        if (_rootColliders == null)
+            return;
+
+        for (int i = 0; i < _rootColliders.Length; i++)
+        {
+            Collider c = _rootColliders[i];
+            if (c != null)
+                Physics.IgnoreCollision(grenadeCol, c, true);
+        }
+    }
+
+    void CacheRangeExplosionFromPrefab()
+    {
+        _cachedRangeExplosion = 2.5f;
+        if (_userConfig == null || _userConfig.grenade == null)
+            return;
+
+        GrenadeController prefabCtrl = _userConfig.grenade.GetComponent<GrenadeController>();
+        if (prefabCtrl != null)
+            _cachedRangeExplosion = Mathf.Max(0.1f, prefabCtrl.RangeExplosion);
+    }
+
+    Vector3 ProjectToGround(Vector3 worldPoint)
+    {
+        float groundY = transform.position.y;
+        Vector3 origin = worldPoint + Vector3.up * 5f;
+        if (_groundHits == null)
+            _groundHits = new RaycastHit[16];
+
+        int hitCount = Physics.RaycastNonAlloc(origin, Vector3.down, _groundHits, 20f, ~0, QueryTriggerInteraction.Ignore);
+        float bestDist = float.MaxValue;
+        bool found = false;
+
+        for (int i = 0; i < hitCount; i++)
+        {
+            RaycastHit hit = _groundHits[i];
+            if (hit.collider == null || !IsGroundPlaneTransform(hit.collider.transform))
+                continue;
+
+            if (hit.distance < bestDist)
+            {
+                bestDist = hit.distance;
+                groundY = hit.point.y;
+                found = true;
+            }
+        }
+
+        if (!found)
+            groundY = transform.position.y;
+
+        return new Vector3(worldPoint.x, groundY, worldPoint.z);
+    }
+
+    static bool IsGroundPlaneTransform(Transform hit)
+    {
+        Transform t = hit;
+        while (t != null)
+        {
+            if (t.name == PlaneName)
+                return true;
+            t = t.parent;
+        }
+
+        return false;
+    }
+
+    void EnsureAimIndicators()
+    {
+        if (_maxRangeRing == null)
+            _maxRangeRing = CreateAimRing("GrenadeMaxRangeRing", new Color(0.2f, 0.85f, 1f, 0.85f), 0.06f);
+        if (_aoeRing == null)
+            _aoeRing = CreateAimRing("GrenadeAoeRing", new Color(1f, 0.85f, 0.2f, 0.9f), 0.05f);
+    }
+
+    LineRenderer CreateAimRing(string objectName, Color color, float width)
+    {
+        GameObject go = new GameObject(objectName);
+        go.transform.SetParent(null, true);
+        LineRenderer lr = go.AddComponent<LineRenderer>();
+        lr.loop = true;
+        lr.useWorldSpace = true;
+        lr.positionCount = AimRingSegments;
+        lr.widthMultiplier = width;
+        lr.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+        lr.receiveShadows = false;
+        lr.material = new Material(Shader.Find("Sprites/Default"));
+        lr.startColor = color;
+        lr.endColor = color;
+        go.SetActive(false);
+        return lr;
+    }
+
+    void SetAimIndicatorsVisible(bool visible)
+    {
+        if (_maxRangeRing != null)
+            _maxRangeRing.gameObject.SetActive(visible);
+        if (_aoeRing != null)
+            _aoeRing.gameObject.SetActive(visible);
+    }
+
+    void RefreshGrenadeAimIndicators()
+    {
+        if (_maxRangeRing == null || _aoeRing == null)
+            return;
+
+        Vector3 center = transform.position;
+        center.y += 0.05f;
+        WriteRingPoints(_maxRangeRing, center, Mathf.Max(0f, rangeGrenade));
+
+        Vector3 aoeCenter = _grenadeAimPoint;
+        aoeCenter.y += 0.05f;
+        WriteRingPoints(_aoeRing, aoeCenter, _cachedRangeExplosion);
+    }
+
+    static void WriteRingPoints(LineRenderer lr, Vector3 center, float radius)
+    {
+        if (lr == null)
+            return;
+
+        int count = lr.positionCount;
+        if (count < 3)
+            return;
+
+        for (int i = 0; i < count; i++)
+        {
+            float t = (i / (float)count) * Mathf.PI * 2f;
+            lr.SetPosition(i, center + new Vector3(Mathf.Cos(t) * radius, 0f, Mathf.Sin(t) * radius));
+        }
+    }
+
+    /// <summary>
+    /// Xóa súng cũ (nếu có) rồi spawn theo WeaponUse trong Inventory.
+    /// </summary>
+    public void EquipInventoryWeapon()
+    {
+        fireLocation = null;
+        _currentWeapon = null;
+
+        if (gunLocation != null)
+        {
+            for (int i = gunLocation.childCount - 1; i >= 0; i--)
+            {
+                Transform child = gunLocation.GetChild(i);
+                if (child != null)
+                    Destroy(child.gameObject);
+            }
+        }
+
+        if (_userConfig == null || gunLocation == null)
+            return;
+
+        if (_userConfig.Inventory == null || _userConfig.Inventory.Count == 0)
+            return;
+
+        _userConfig.ClampWeaponUse();
+        GameObject gunPrefab = _userConfig.Inventory[_userConfig.WeaponUse];
+        if (gunPrefab == null)
+            return;
+
+        GameObject gunInstance = Instantiate(gunPrefab, gunLocation);
+        gunInstance.transform.localPosition = Vector3.zero;
+        gunInstance.transform.localRotation = Quaternion.identity;
+
+        Transform found = FindChildByName(gunInstance.transform, FireLocationName);
+        if (found != null)
+            fireLocation = found;
+
+        // Lấy sound / Fire VFX theo WeaponConfig của súng đang dùng
+        if (_weaponConfig != null)
+            _currentWeapon = _weaponConfig.FindByGunPrefab(gunPrefab);
+
+        ApplyCurrentWeaponFireSpeed();
+    }
+
+    /// <summary>
+    /// Gán speed anim infantry_combat_shoot theo fireSpeed của weapon đang dùng.
+    /// </summary>
+    void ApplyCurrentWeaponFireSpeed()
+    {
+        if (_animController == null)
+            return;
+
+        float speed = _currentWeapon != null ? _currentWeapon.FireSpeed : 1f;
+        _animController.SetFloat(FireSpeedAnimParam, speed);
+    }
+
+    /// <summary>
+    /// Tìm transform con theo tên (đệ quy).
+    /// </summary>
+    static Transform FindChildByName(Transform root, string targetName)
+    {
+        if (root == null)
+            return null;
+
+        if (root.name == targetName)
+            return root;
+
+        for (int i = 0; i < root.childCount; i++)
+        {
+            Transform found = FindChildByName(root.GetChild(i), targetName);
+            if (found != null)
+                return found;
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Khi UpperBody bắt đầu (hoặc lặp lại) state shoot thì phát sound + spawn Fire VFX từ WeaponConfig.
     /// </summary>
     void TryPlayFireSoundOnShootStart()
     {
@@ -133,18 +628,60 @@ public class PlayerController : MonoBehaviour
         if (!_shootAnimActive || cycleIndex != _lastShootCycleIndex)
         {
             PlayFireSound();
+            SpawnFireVfx();
+            SpawnBullet();
             _lastShootCycleIndex = cycleIndex;
         }
 
         _shootAnimActive = true;
     }
 
-    void PlayFireSound()
+    void SpawnFireVfx()
     {
-        if (_soundConfig == null || _audioSource == null || string.IsNullOrEmpty(fireSound))
+        if (_currentWeapon == null || _currentWeapon.FireVfx == null || fireLocation == null)
             return;
 
-        SoundEntry entry = _soundConfig.FindSfxByName(fireSound);
+        // Khớp world pos/rot/scale của fireLocation, rồi tách khỏi hierarchy
+        GameObject vfx = Instantiate(_currentWeapon.FireVfx, fireLocation);
+        Transform t = vfx.transform;
+        t.localPosition = Vector3.zero;
+        t.localRotation = Quaternion.identity;
+        t.localScale = Vector3.one;
+        t.SetParent(null, true);
+    }
+
+    /// <summary>
+    /// Spawn Prefab Bullet tại vị trí/hướng FireLocation của prefab gun (không làm con).
+    /// </summary>
+    void SpawnBullet()
+    {
+        if (_currentWeapon == null || _currentWeapon.BulletPrefab == null || fireLocation == null)
+            return;
+
+        GameObject bullet = Instantiate(
+            _currentWeapon.BulletPrefab,
+            fireLocation.position,
+            fireLocation.rotation);
+
+        BulletController bulletController = bullet.GetComponent<BulletController>();
+        if (bulletController == null)
+            bulletController = bullet.AddComponent<BulletController>();
+
+        bulletController.Init(
+            _currentWeapon.Damage,
+            _currentWeapon.BulletSpeed,
+            fireLocation.forward);
+    }
+
+    void PlayFireSound()
+    {
+        if (_currentWeapon == null || _soundConfig == null || _audioSource == null)
+            return;
+
+        if (string.IsNullOrEmpty(_currentWeapon.Sound))
+            return;
+
+        SoundEntry entry = _soundConfig.FindSfxByName(_currentWeapon.Sound);
         if (entry == null || entry.Clip == null)
             return;
 
@@ -154,16 +691,342 @@ public class PlayerController : MonoBehaviour
 #if UNITY_EDITOR
     void Reset()
     {
-        // Gán sẵn SoundConfig mặc định khi gắn component
+        // Gán sẵn config mặc định khi gắn component
         _soundConfig = AssetDatabase.LoadAssetAtPath<SoundConfig>(SoundConfigAssetPath);
+        _userConfig = AssetDatabase.LoadAssetAtPath<UserConfig>(UserConfigAssetPath);
+        _weaponConfig = AssetDatabase.LoadAssetAtPath<WeaponConfig>(WeaponConfigAssetPath);
     }
 
     void OnValidate()
     {
         if (_soundConfig == null)
             _soundConfig = AssetDatabase.LoadAssetAtPath<SoundConfig>(SoundConfigAssetPath);
+        if (_userConfig == null)
+            _userConfig = AssetDatabase.LoadAssetAtPath<UserConfig>(UserConfigAssetPath);
+        if (_weaponConfig == null)
+            _weaponConfig = AssetDatabase.LoadAssetAtPath<WeaponConfig>(WeaponConfigAssetPath);
     }
 #endif
+
+    /// <summary>
+    /// Nhận damage từ enemy — trừ health; spawn hitVFX ngược hướng tấn công.
+    /// </summary>
+    public void TakeDamage(float damage, Transform attacker = null)
+    {
+        if (_isDead)
+            return;
+
+        int amount = Mathf.Max(0, Mathf.RoundToInt(damage));
+        if (amount <= 0)
+            return;
+
+        SpawnHitVfx(attacker);
+
+        health = Mathf.Max(0, health - amount);
+        HealthChanged?.Invoke();
+
+        if (health <= 0)
+            ApplyDie();
+    }
+
+    /// <summary>
+    /// Spawn hitVFX tại vị trí Player; hướng xoay = ngược forward của attacker (Zombie).
+    /// </summary>
+    void SpawnHitVfx(Transform attacker)
+    {
+        if (hitVFX == null)
+            return;
+
+        Quaternion rotation = Quaternion.identity;
+        if (attacker != null)
+        {
+            Vector3 attackForward = attacker.forward;
+            attackForward.y = 0f;
+            if (attackForward.sqrMagnitude > 0.0001f)
+                rotation = Quaternion.LookRotation(-attackForward.normalized);
+        }
+
+        Instantiate(hitVFX, transform.position, rotation);
+    }
+
+    /// <summary>
+    /// Chết giống Zombie: tắt control → ragdoll → dissolve → Destroy.
+    /// </summary>
+    void ApplyDie()
+    {
+        if (_isDead)
+            return;
+
+        _isDead = true;
+        health = 0;
+
+        // Tắt CharacterController trước — capsule gốc đụng xương sẽ đẩy văng
+        if (_characterController != null)
+            _characterController.enabled = false;
+
+        if (_animController != null)
+        {
+            _animController.SetBool("Run", false);
+            _animController.SetBool("Shoot", false);
+            if (_upperBodyLayerIndex >= 0)
+                _animController.SetLayerWeight(_upperBodyLayerIndex, 0f);
+            _animController.applyRootMotion = false;
+            _animController.enabled = false;
+        }
+
+        if (_rootColliders != null)
+        {
+            for (int i = 0; i < _rootColliders.Length; i++)
+            {
+                if (_rootColliders[i] != null)
+                    _rootColliders[i].enabled = false;
+            }
+        }
+
+        ApplyDieRagdollAsync();
+    }
+
+    async Awaitable ApplyDieRagdollAsync()
+    {
+        // Chờ 1 frame để CharacterController/collider gốc chắc chắn tắt
+        await Awaitable.NextFrameAsync();
+        if (this == null)
+            return;
+
+        Physics.SyncTransforms();
+        IgnoreRagdollSelfCollision();
+        SetRagdollKinematic(false);
+        await DissolveAfterDieAsync();
+    }
+
+    async Awaitable DissolveAfterDieAsync()
+    {
+        await Awaitable.WaitForSecondsAsync(_ragdollWaitSeconds);
+
+        if (!PrepareDissolveMaterials())
+        {
+            Destroy(gameObject);
+            return;
+        }
+
+        float elapsed = 0f;
+        while (elapsed < _dissolveDuration)
+        {
+            elapsed += Time.deltaTime;
+            SetDissolveAmount(Mathf.Clamp01(elapsed / _dissolveDuration));
+            await Awaitable.NextFrameAsync();
+        }
+
+        SetDissolveAmount(1f);
+        Destroy(gameObject);
+    }
+
+    bool PrepareDissolveMaterials()
+    {
+        if (_dissolveShader == null)
+            _dissolveShader = Shader.Find("Custom/EnemyDissolve");
+
+        if (_dissolveShader == null || _renderers == null || _renderers.Length == 0)
+            return false;
+
+        int materialCount = 0;
+        for (int i = 0; i < _renderers.Length; i++)
+        {
+            Renderer renderer = _renderers[i];
+            if (renderer == null)
+                continue;
+
+            Material[] shared = renderer.sharedMaterials;
+            if (shared != null)
+                materialCount += shared.Length;
+        }
+
+        if (materialCount == 0)
+            return false;
+
+        _dissolveMaterials = new Material[materialCount];
+        int writeIndex = 0;
+
+        for (int i = 0; i < _renderers.Length; i++)
+        {
+            Renderer renderer = _renderers[i];
+            if (renderer == null)
+                continue;
+
+            Material[] shared = renderer.sharedMaterials;
+            if (shared == null || shared.Length == 0)
+                continue;
+
+            Material[] instances = new Material[shared.Length];
+            for (int m = 0; m < shared.Length; m++)
+            {
+                Material source = shared[m];
+                Material dissolveMat = new Material(_dissolveShader);
+                CopySourceAppearance(source, dissolveMat);
+                dissolveMat.SetFloat(DissolveAmountId, 0f);
+                instances[m] = dissolveMat;
+                _dissolveMaterials[writeIndex++] = dissolveMat;
+            }
+
+            renderer.materials = instances;
+        }
+
+        return writeIndex > 0;
+    }
+
+    void CopySourceAppearance(Material source, Material dissolveMat)
+    {
+        if (source == null || dissolveMat == null)
+            return;
+
+        if (source.HasProperty(BaseMapId))
+            dissolveMat.SetTexture(BaseMapId, source.GetTexture(BaseMapId));
+        else if (source.HasProperty(MainTexId))
+            dissolveMat.SetTexture(BaseMapId, source.GetTexture(MainTexId));
+
+        if (source.HasProperty(BaseColorId))
+            dissolveMat.SetColor(BaseColorId, source.GetColor(BaseColorId));
+        else if (source.HasProperty(ColorId))
+            dissolveMat.SetColor(BaseColorId, source.GetColor(ColorId));
+    }
+
+    void SetDissolveAmount(float amount)
+    {
+        if (_dissolveMaterials == null)
+            return;
+
+        for (int i = 0; i < _dissolveMaterials.Length; i++)
+        {
+            Material mat = _dissolveMaterials[i];
+            if (mat == null)
+                continue;
+
+            mat.SetFloat(DissolveAmountId, amount);
+        }
+    }
+
+    void SetRagdollKinematic(bool kinematic)
+    {
+        if (_ragdollBodies == null)
+            return;
+
+        for (int i = 0; i < _ragdollBodies.Length; i++)
+        {
+            Rigidbody rb = _ragdollBodies[i];
+            if (rb == null)
+                continue;
+
+            // Xóa vận tốc dư + hạn chế lực đẩy khi depenetration (tránh văng)
+            rb.linearVelocity = Vector3.zero;
+            rb.angularVelocity = Vector3.zero;
+            rb.maxDepenetrationVelocity = 1f;
+            rb.isKinematic = kinematic;
+            if (!kinematic)
+                rb.WakeUp();
+        }
+
+        // Sống: tắt collider xương — CC.Move đụng xương → đẩy bay. Chết: bật lại cho ragdoll
+        if (_ragdollColliders == null)
+            return;
+
+        for (int i = 0; i < _ragdollColliders.Length; i++)
+        {
+            if (_ragdollColliders[i] != null)
+                _ragdollColliders[i].enabled = !kinematic;
+        }
+    }
+
+    void CacheRagdollColliders()
+    {
+        if (_ragdollBodies == null || _ragdollBodies.Length == 0)
+        {
+            _ragdollColliders = new Collider[0];
+            return;
+        }
+
+        int count = 0;
+        for (int i = 0; i < _ragdollBodies.Length; i++)
+        {
+            if (_ragdollBodies[i] != null && _ragdollBodies[i].GetComponent<Collider>() != null)
+                count++;
+        }
+
+        _ragdollColliders = new Collider[count];
+        int index = 0;
+        for (int i = 0; i < _ragdollBodies.Length; i++)
+        {
+            Rigidbody rb = _ragdollBodies[i];
+            if (rb == null)
+                continue;
+
+            Collider col = rb.GetComponent<Collider>();
+            if (col == null)
+                continue;
+
+            _ragdollColliders[index++] = col;
+        }
+    }
+
+    void CacheRootColliders()
+    {
+        Collider[] all = GetComponents<Collider>();
+        int count = 0;
+        for (int i = 0; i < all.Length; i++)
+        {
+            if (all[i] != null && all[i].GetComponent<Rigidbody>() == null)
+                count++;
+        }
+
+        _rootColliders = new Collider[count];
+        int index = 0;
+        for (int i = 0; i < all.Length; i++)
+        {
+            Collider col = all[i];
+            if (col == null || col.GetComponent<Rigidbody>() != null)
+                continue;
+
+            _rootColliders[index++] = col;
+        }
+    }
+
+    void IgnoreRagdollSelfCollision()
+    {
+        if (_ragdollColliders == null)
+            return;
+
+        for (int i = 0; i < _ragdollColliders.Length; i++)
+        {
+            Collider a = _ragdollColliders[i];
+            if (a == null)
+                continue;
+
+            for (int j = i + 1; j < _ragdollColliders.Length; j++)
+            {
+                Collider b = _ragdollColliders[j];
+                if (b == null)
+                    continue;
+
+                Physics.IgnoreCollision(a, b, true);
+            }
+        }
+    }
+
+    void OnDestroy()
+    {
+        if (_maxRangeRing != null)
+            Destroy(_maxRangeRing.gameObject);
+        if (_aoeRing != null)
+            Destroy(_aoeRing.gameObject);
+
+        if (_dissolveMaterials == null)
+            return;
+
+        for (int i = 0; i < _dissolveMaterials.Length; i++)
+        {
+            if (_dissolveMaterials[i] != null)
+                Destroy(_dissolveMaterials[i]);
+        }
+    }
 
     Transform FindNearestEnemy()
     {
@@ -212,6 +1075,21 @@ public class PlayerController : MonoBehaviour
         Gizmos.DrawSphere(transform.position, _rangeAttack);
         Gizmos.color = new Color(1f, 0.3f, 0.2f, 0.9f);
         Gizmos.DrawWireSphere(transform.position, _rangeAttack);
+
+        // Gizmo rangeGrenade (màu cyan)
+        Handles.color = new Color(0.2f, 0.85f, 1f, 0.9f);
+        float newGrenadeRange = Handles.RadiusHandle(Quaternion.identity, transform.position, Mathf.Max(0f, rangeGrenade));
+        if (!Mathf.Approximately(newGrenadeRange, rangeGrenade))
+        {
+            Undo.RecordObject(this, "Chỉnh Range Grenade");
+            rangeGrenade = Mathf.Max(0f, newGrenadeRange);
+            EditorUtility.SetDirty(this);
+        }
+
+        Gizmos.color = new Color(0.2f, 0.85f, 1f, 0.12f);
+        Gizmos.DrawSphere(transform.position, rangeGrenade);
+        Gizmos.color = new Color(0.2f, 0.85f, 1f, 0.9f);
+        Gizmos.DrawWireSphere(transform.position, rangeGrenade);
     }
 #endif
 }
