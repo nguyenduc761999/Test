@@ -16,6 +16,7 @@ Shader "Custom/EnemyDissolve"
             "RenderType" = "TransparentCutout"
             "Queue" = "AlphaTest"
             "RenderPipeline" = "UniversalPipeline"
+            "IgnoreProjector" = "True"
         }
 
         Pass
@@ -25,8 +26,10 @@ Shader "Custom/EnemyDissolve"
 
             Cull Back
             ZWrite On
+            ZTest LEqual
 
             HLSLPROGRAM
+            #pragma target 2.0
             #pragma vertex vert
             #pragma fragment frag
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
@@ -54,7 +57,6 @@ Shader "Custom/EnemyDissolve"
                 float2 uv : TEXCOORD0;
             };
 
-            // Simple UV noise (no extra texture needed)
             float Hash21(float2 p)
             {
                 p = frac(p * float2(123.34, 456.21));
@@ -75,11 +77,8 @@ Shader "Custom/EnemyDissolve"
                 half4 color = SAMPLE_TEXTURE2D(_BaseMap, sampler_BaseMap, input.uv) * _BaseColor;
                 float noise = Hash21(input.uv * 48.0);
                 float dissolve = _DissolveAmount;
-
-                // Clip the mesh gradually using noise
                 clip(noise - dissolve);
 
-                // Burn edge near the dissolve cutoff
                 float edge = dissolve + _EdgeWidth;
                 if (noise < edge)
                 {
@@ -88,6 +87,95 @@ Shader "Custom/EnemyDissolve"
                 }
 
                 return color;
+            }
+            ENDHLSL
+        }
+
+        Pass
+        {
+            Name "ShadowCaster"
+            Tags { "LightMode" = "ShadowCaster" }
+
+            ZWrite On
+            ZTest LEqual
+            ColorMask 0
+            Cull Back
+
+            HLSLPROGRAM
+            #pragma target 2.0
+            #pragma vertex ShadowVert
+            #pragma fragment ShadowFrag
+            #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
+            #include "Packages/com.unity.render-pipelines.core/ShaderLibrary/CommonMaterial.hlsl"
+            #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Shadows.hlsl"
+
+            float3 _LightDirection;
+
+            struct Attributes
+            {
+                float4 positionOS : POSITION;
+            };
+
+            struct Varyings
+            {
+                float4 positionCS : SV_POSITION;
+            };
+
+            Varyings ShadowVert(Attributes input)
+            {
+                Varyings output;
+                float3 positionWS = TransformObjectToWorld(input.positionOS.xyz);
+                output.positionCS = TransformWorldToHClip(ApplyShadowBias(positionWS, float3(0.0, 1.0, 0.0), _LightDirection));
+                #if UNITY_REVERSED_Z
+                output.positionCS.z = min(output.positionCS.z, UNITY_NEAR_CLIP_VALUE);
+                #else
+                output.positionCS.z = max(output.positionCS.z, UNITY_NEAR_CLIP_VALUE);
+                #endif
+                return output;
+            }
+
+            half4 ShadowFrag(Varyings input) : SV_Target
+            {
+                return 0;
+            }
+            ENDHLSL
+        }
+
+        Pass
+        {
+            Name "DepthOnly"
+            Tags { "LightMode" = "DepthOnly" }
+
+            ZWrite On
+            ColorMask R
+            Cull Back
+
+            HLSLPROGRAM
+            #pragma target 2.0
+            #pragma vertex DepthVert
+            #pragma fragment DepthFrag
+            #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
+
+            struct Attributes
+            {
+                float4 positionOS : POSITION;
+            };
+
+            struct Varyings
+            {
+                float4 positionCS : SV_POSITION;
+            };
+
+            Varyings DepthVert(Attributes input)
+            {
+                Varyings output;
+                output.positionCS = TransformObjectToHClip(input.positionOS.xyz);
+                return output;
+            }
+
+            half DepthFrag(Varyings input) : SV_Target
+            {
+                return input.positionCS.z;
             }
             ENDHLSL
         }

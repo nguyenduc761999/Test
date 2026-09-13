@@ -50,12 +50,13 @@ public class PlayerController : MonoBehaviour
     const float MoveSpeed = 5f;
     const float RotateSpeed = 10f;
     const float GroundStickVelocity = -2f;
-    const int EnemyHitBufferSize = 16;
     const string ShootAnimStateName = "infantry_combat_shoot";
     const string FireSpeedAnimParam = "FireSpeed";
     const string FireLocationName = "FireLocation";
     const string PlaneName = "Plane";
     const float GrenadeSpawnHeight = 1.2f;
+    const float ShotOriginHeight = 1.15f;
+    const float ShotOriginForward = 0.5f;
     const int AimRingSegments = 48;
 #if UNITY_EDITOR
     const string SoundConfigAssetPath = "Assets/Test_Asset/Config/SoundConfig.asset";
@@ -69,11 +70,10 @@ public class PlayerController : MonoBehaviour
     static readonly int MainTexId = Shader.PropertyToID("_MainTex");
     static readonly int ColorId = Shader.PropertyToID("_Color");
 
-    LayerMask _enemyLayerMask;
-    Collider[] _enemyHits;
     int _upperBodyLayerIndex = -1;
     bool _shootAnimActive;
     int _lastShootCycleIndex = -1;
+    EnemyController _aimEnemy;
 
     Rigidbody[] _ragdollBodies;
     Collider[] _ragdollColliders;
@@ -122,14 +122,15 @@ public class PlayerController : MonoBehaviour
                 _upperBodyLayerIndex = _animController.GetLayerIndex("UpperBody");
                 // CharacterController drives position — Run anim root-motion Y would lift the whole player
                 _animController.applyRootMotion = false;
+                // Mobile CullUpdateTransforms skips hand bones → muzzle / bullets miss
+                _animController.cullingMode = AnimatorCullingMode.AlwaysAnimate;
+                _animController.updateMode = AnimatorUpdateMode.Normal;
             }
         }
 
         // Cache FixedJoystick on the scene
         _fixedJoystick = FindFirstObjectByType<FixedJoystick>();
 
-        _enemyLayerMask = LayerMask.GetMask("Enemy");
-        _enemyHits = new Collider[EnemyHitBufferSize];
         _groundHits = new RaycastHit[16];
         _mainCamera = Camera.main;
 
@@ -206,8 +207,8 @@ public class PlayerController : MonoBehaviour
             _animController.SetBool("Run", isRunning);
 
         // Find the nearest Enemy inside rangeAttack
-        Transform nearestEnemy = FindNearestEnemy();
-        bool hasEnemy = nearestEnemy != null;
+        _aimEnemy = FindNearestEnemy();
+        bool hasEnemy = _aimEnemy != null;
 
         // UpperBody: Weight = 1 if an Enemy is in range, otherwise 0
         if (_animController != null && _upperBodyLayerIndex >= 0)
@@ -217,13 +218,10 @@ public class PlayerController : MonoBehaviour
         if (_animController != null)
             _animController.SetBool("Shoot", hasEnemy);
 
-        // Play SFX + VFX each time a shoot anim cycle starts
-        TryPlayFireSoundOnShootStart();
-
         // Enemy in range: lock facing, do not rotate with movement
-        if (hasEnemy)
+        if (hasEnemy && _characterModel != null)
         {
-            Vector3 lookDirection = nearestEnemy.position - _characterModel.transform.position;
+            Vector3 lookDirection = _aimEnemy.transform.position - _characterModel.transform.position;
             lookDirection.y = 0f;
             if (lookDirection.sqrMagnitude > 0.0001f)
                 _characterModel.transform.rotation = Quaternion.LookRotation(lookDirection);
@@ -257,6 +255,15 @@ public class PlayerController : MonoBehaviour
 
         if (_grenadeAiming)
             RefreshGrenadeAimIndicators();
+    }
+
+    void LateUpdate()
+    {
+        if (_isDead || _movementLocked || _characterModel == null)
+            return;
+
+        // After Animator writes bones this frame — spawn using a stable body aim, not the swinging muzzle
+        TryPlayFireSoundOnShootStart();
     }
 
     /// <summary>
@@ -704,17 +711,19 @@ public class PlayerController : MonoBehaviour
     }
 
     /// <summary>
-    /// Spawns Prefab Bullet at the gun prefab's FireLocation pos/rot (not parented).
+    /// Spawns Prefab Bullet from a stable body origin toward the aimed enemy (not parented).
     /// </summary>
     void SpawnBullet()
     {
-        if (_currentWeapon == null || _currentWeapon.BulletPrefab == null || fireLocation == null)
+        if (_currentWeapon == null || _currentWeapon.BulletPrefab == null)
             return;
 
+        Vector3 origin = GetShotOrigin();
+        Vector3 direction = GetShotDirection();
         GameObject bullet = Instantiate(
             _currentWeapon.BulletPrefab,
-            fireLocation.position,
-            fireLocation.rotation);
+            origin + direction * 0.15f,
+            Quaternion.LookRotation(direction));
 
         BulletController bulletController = bullet.GetComponent<BulletController>();
         if (bulletController == null)
@@ -723,7 +732,34 @@ public class PlayerController : MonoBehaviour
         bulletController.Init(
             _currentWeapon.Damage,
             _currentWeapon.BulletSpeed,
-            fireLocation.forward);
+            direction);
+    }
+
+    Vector3 GetShotOrigin()
+    {
+        Transform body = _characterModel != null ? _characterModel.transform : transform;
+        return body.position + Vector3.up * ShotOriginHeight + body.forward * ShotOriginForward;
+    }
+
+    /// <summary>
+    /// Shot direction from a stable body origin to the aimed zombie's chest.
+    /// FireLocation sits ~2.5m along the gun — on mobile the hand bone swings that tip wildly.
+    /// </summary>
+    Vector3 GetShotDirection()
+    {
+        Vector3 origin = GetShotOrigin();
+        if (_aimEnemy != null && !_aimEnemy.die)
+        {
+            Vector3 chest = _aimEnemy.transform.position + Vector3.up * 0.9f;
+            Vector3 toEnemy = chest - origin;
+            if (toEnemy.sqrMagnitude > 0.0001f)
+                return toEnemy.normalized;
+        }
+
+        Transform body = _characterModel != null ? _characterModel.transform : transform;
+        Vector3 forward = body.forward;
+        forward.y = 0f;
+        return forward.sqrMagnitude > 0.0001f ? forward.normalized : Vector3.forward;
     }
 
     void PlayFireSound()
@@ -806,7 +842,7 @@ public class PlayerController : MonoBehaviour
                 rotation = Quaternion.LookRotation(-attackForward.normalized);
         }
 
-        Instantiate(hitVFX, transform.position, rotation);
+        Instantiate(hitVFX, transform.position + Vector3.up * 0.9f, rotation);
     }
 
     /// <summary>
@@ -1088,34 +1124,9 @@ public class PlayerController : MonoBehaviour
         }
     }
 
-    Transform FindNearestEnemy()
+    EnemyController FindNearestEnemy()
     {
-        if (_enemyHits == null)
-            return null;
-
-        int hitCount = Physics.OverlapSphereNonAlloc(
-            transform.position,
-            _rangeAttack,
-            _enemyHits,
-            _enemyLayerMask);
-
-        Transform nearest = null;
-        float nearestDistSq = float.MaxValue;
-        for (int i = 0; i < hitCount; i++)
-        {
-            Collider hit = _enemyHits[i];
-            if (hit == null)
-                continue;
-
-            float distSq = (hit.transform.position - transform.position).sqrMagnitude;
-            if (distSq < nearestDistSq)
-            {
-                nearestDistSq = distSq;
-                nearest = hit.transform;
-            }
-        }
-
-        return nearest;
+        return EnemyController.FindNearestAlive(transform.position, _rangeAttack);
     }
 
 #if UNITY_EDITOR

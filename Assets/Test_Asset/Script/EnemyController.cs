@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.AI;
 #if UNITY_EDITOR
@@ -50,6 +51,16 @@ public class EnemyController : MonoBehaviour
     const float ChaseSlotGoldenAngleDegrees = 137.508f;
 
     static int _nextChaseSlot;
+    static readonly List<EnemyController> _activeEnemies = new List<EnemyController>(32);
+
+    const float HitCapsuleRadius = 0.65f;
+    const float HitCapsuleBottom = 0.1f;
+    const float HitCapsuleTop = 1.85f;
+    const float HitCapsuleRadiusPadding = 0.25f;
+    const float MaxRagdollSpeed = 6.5f;
+    const float MaxExplosionRagdollSpeed = 16f;
+    const float MaxExplosionRagdollAngularSpeed = 20f;
+    const float MaxDepenetrationSpeed = 1.5f;
 
     NavMeshAgent _agent;
     Transform _player;
@@ -65,6 +76,23 @@ public class EnemyController : MonoBehaviour
     bool _hasWalkParam;
     bool _hasRunParam;
     int _chaseSlot;
+    Rigidbody _hipsBody;
+    CharacterJoint[] _ragdollJoints;
+    Transform[] _skinBones;
+    Vector3[] _skinBoneLocalPositions;
+    Quaternion[] _skinBoneLocalRotations;
+    Mesh[] _bakedDissolveMeshes;
+    CharacterController _playerCharacterController;
+    bool _isExplosionDeath;
+    bool _ragdollActive;
+    bool _hasPendingExplosion;
+    Vector3 _pendingExplosionPos;
+    float _pendingExplosionForce;
+    float _pendingExplosionRadius;
+    float _pendingExplosionUpwards;
+    float _hitCapsuleRadius = HitCapsuleRadius;
+    float _hitCapsuleBottom = HitCapsuleBottom;
+    float _hitCapsuleTop = HitCapsuleTop;
 
     void Awake()
     {
@@ -78,11 +106,19 @@ public class EnemyController : MonoBehaviour
         CacheRootColliders();
         IgnoreRagdollSelfCollision();
         SetRagdollKinematic(true);
+        CacheHipsBody();
+        CacheSkinBones();
+        CacheRagdollJoints();
+        // Alive: only the Enemy-layer root capsule takes hits — bone colliders stay off so the hitbox stays aligned
+        SetRagdollCollidersEnabled(false);
+        ApplySkinnedMeshBoneQuality();
 
         // A: offset radius / avoidance / priority so agents differ
         ConfigureAgentAvoidance();
         // B: one slot around the player per enemy
         _chaseSlot = _nextChaseSlot++;
+
+        CacheHitCapsule();
 
         // Agent drives position → disable root motion to avoid fighting it
         if (animController != null)
@@ -94,13 +130,73 @@ public class EnemyController : MonoBehaviour
 
         _playerController = FindFirstObjectByType<PlayerController>();
         if (_playerController != null)
+        {
             _player = _playerController.transform;
+            _playerCharacterController = _playerController.GetComponent<CharacterController>();
+        }
 
         if (_dissolveShader == null)
             _dissolveShader = Shader.Find("Custom/EnemyDissolve");
 
         // Health comes from EnemyConfig for the matching instance
         ApplyHealthFromConfig();
+    }
+
+    void OnEnable()
+    {
+        _activeEnemies.Add(this);
+    }
+
+    void OnDisable()
+    {
+        _activeEnemies.Remove(this);
+    }
+
+    /// <summary>
+    /// Nearest living enemy whose root is inside range (transform distance, not physics).
+    /// </summary>
+    public static EnemyController FindNearestAlive(Vector3 position, float range)
+    {
+        EnemyController nearest = null;
+        float nearestDistSq = range * range;
+        for (int i = 0; i < _activeEnemies.Count; i++)
+        {
+            EnemyController enemy = _activeEnemies[i];
+            if (enemy == null || enemy.die || enemy._isDead)
+                continue;
+
+            float distSq = (enemy.transform.position - position).sqrMagnitude;
+            if (distSq <= nearestDistSq)
+            {
+                nearestDistSq = distSq;
+                nearest = enemy;
+            }
+        }
+
+        return nearest;
+    }
+
+    public static int ActiveEnemyCount => _activeEnemies.Count;
+
+    public static EnemyController GetActiveEnemy(int index)
+    {
+        if (index < 0 || index >= _activeEnemies.Count)
+            return null;
+        return _activeEnemies[index];
+    }
+
+    /// <summary>
+    /// True if the shot segment hits this enemy's standing capsule (NavMeshAgent transform).
+    /// </summary>
+    public bool HitByShot(Vector3 from, Vector3 to, float bulletRadius)
+    {
+        if (_isDead || die)
+            return false;
+
+        Vector3 bottom = transform.position + Vector3.up * _hitCapsuleBottom;
+        Vector3 top = transform.position + Vector3.up * _hitCapsuleTop;
+        float limit = _hitCapsuleRadius + Mathf.Max(0f, bulletRadius);
+        return DistanceSegmentSegment(from, to, bottom, top) <= limit;
     }
 
     void Start()
@@ -154,7 +250,10 @@ public class EnemyController : MonoBehaviour
             ApplyDie();
 
         if (_isDead)
+        {
+            ClampRagdollSpeed();
             return;
+        }
 
         // Lose / match locked → stand still, do not chase
         if (_frozen)
@@ -169,6 +268,17 @@ public class EnemyController : MonoBehaviour
 
         ChasePlayer();
         UpdateMoveAnimation();
+    }
+
+    void FixedUpdate()
+    {
+        if (!_isDead)
+            return;
+
+        if (_ragdollActive && _hasPendingExplosion)
+            ApplyPendingExplosion();
+
+        ClampRagdollSpeed();
     }
 
     void EnsureOnNavMesh()
@@ -235,7 +345,7 @@ public class EnemyController : MonoBehaviour
 
         // A: raise avoidance radius + high-quality avoidance + random priority
         _agent.radius = Mathf.Max(_agent.radius, _agentAvoidanceRadius);
-        _agent.obstacleAvoidanceType = ObstacleAvoidanceType.HighQualityObstacleAvoidance;
+        _agent.obstacleAvoidanceType = ObstacleAvoidanceType.MedQualityObstacleAvoidance;
         _agent.avoidancePriority = Random.Range(0, 99);
 
         // Must equal rangeAttack: stop as soon as in attack range
@@ -465,20 +575,13 @@ public class EnemyController : MonoBehaviour
             return;
 
         health = 0f;
+        _isExplosionDeath = true;
+        _hasPendingExplosion = true;
+        _pendingExplosionPos = explosionPos;
+        _pendingExplosionForce = force;
+        _pendingExplosionRadius = radius;
+        _pendingExplosionUpwards = upwardsModifier;
         ApplyDie();
-
-        if (_ragdollBodies == null || force <= 0f)
-            return;
-
-        float safeRadius = Mathf.Max(0.01f, radius);
-        for (int i = 0; i < _ragdollBodies.Length; i++)
-        {
-            Rigidbody rb = _ragdollBodies[i];
-            if (rb == null || rb.isKinematic)
-                continue;
-
-            rb.AddExplosionForce(force, explosionPos, safeRadius, upwardsModifier, ForceMode.Impulse);
-        }
     }
 
     /// <summary>
@@ -498,7 +601,7 @@ public class EnemyController : MonoBehaviour
                 rotation = Quaternion.LookRotation(-attackForward.normalized);
         }
 
-        Instantiate(hitVFX, transform.position, rotation);
+        Instantiate(hitVFX, transform.position + Vector3.up * 0.9f, rotation);
     }
 
 #if UNITY_EDITOR
@@ -586,12 +689,17 @@ public class EnemyController : MonoBehaviour
         die = true;
         SoundManager.Instance?.PlaySfxAt(SoundConfig.SfxZombieDie, transform.position);
 
-        // Disable pathfinding before ragdoll
+        // Disable pathfinding before ragdoll without letting the agent warp the pose
         if (_agent != null)
         {
+            Vector3 freezePos = transform.position;
+            Quaternion freezeRot = transform.rotation;
             if (_agent.isOnNavMesh)
                 _agent.isStopped = true;
+            _agent.updatePosition = false;
+            _agent.updateRotation = false;
             _agent.enabled = false;
+            transform.SetPositionAndRotation(freezePos, freezeRot);
         }
 
         if (_hasWalkParam && animController != null)
@@ -599,9 +707,14 @@ public class EnemyController : MonoBehaviour
         if (_hasRunParam && animController != null)
             animController.SetBool(RunHash, false);
 
-        // Disable Animator so physics drives the bones
+        // Keep Animator enabled this frame so GPU skinning still has a valid pose
+        PrepareRenderersForRagdoll();
         if (animController != null)
-            animController.enabled = false;
+        {
+            animController.writeDefaultValuesOnDisable = false;
+            animController.keepAnimatorStateOnDisable = true;
+            animController.speed = 0f;
+        }
 
         // Disable the root collider (avoids hitting bone capsules → launch)
         if (_rootColliders != null)
@@ -613,20 +726,42 @@ public class EnemyController : MonoBehaviour
             }
         }
 
-        // Enable ragdoll (clear leftover velocity before physics)
-        SetRagdollKinematic(false);
-
-        // Wait for ragdoll, then dissolve → Destroy
+        Physics.SyncTransforms();
         DissolveAfterDieAsync();
     }
 
     async Awaitable DissolveAfterDieAsync()
     {
-        await Awaitable.WaitForSecondsAsync(_ragdollWaitSeconds);
+        // Wait 1 frame so the root collider is fully off before ragdoll (avoids launching bones)
+        await Awaitable.NextFrameAsync();
+        if (this == null)
+            return;
 
+        FreezeSkinnedPoseForRagdoll();
+        RelaxRagdollJoints();
+        IgnoreRagdollExternalCollisions();
+
+        // One extra frame so GPU skinning uploads the restored bone matrices before PhysX starts
+        await Awaitable.NextFrameAsync();
+        if (this == null)
+            return;
+
+        Physics.SyncTransforms();
+        SetRagdollCollidersEnabled(true);
+        SetRagdollKinematic(false);
+        SetRagdollPhysicsSettings();
+        _ragdollActive = true;
+
+        await Awaitable.WaitForSecondsAsync(_ragdollWaitSeconds);
+        if (this == null)
+            return;
+
+        // Bake a static posed mesh before dissolve — Custom/EnemyDissolve has no GPU skinning
         if (!PrepareDissolveMaterials())
         {
-            Destroy(gameObject);
+            await Awaitable.WaitForSecondsAsync(_dissolveDuration);
+            if (this != null)
+                Destroy(gameObject);
             return;
         }
 
@@ -636,10 +771,418 @@ public class EnemyController : MonoBehaviour
             elapsed += Time.deltaTime;
             SetDissolveAmount(Mathf.Clamp01(elapsed / _dissolveDuration));
             await Awaitable.NextFrameAsync();
+            if (this == null)
+                return;
         }
 
         SetDissolveAmount(1f);
         Destroy(gameObject);
+    }
+
+    // Force 4 bone weights — Mobile quality can drop to 2 and collapse the mesh on ragdoll
+    void ApplySkinnedMeshBoneQuality()
+    {
+        if (_renderers == null)
+            return;
+
+        for (int i = 0; i < _renderers.Length; i++)
+        {
+            SkinnedMeshRenderer smr = _renderers[i] as SkinnedMeshRenderer;
+            if (smr == null)
+                continue;
+
+            smr.quality = SkinQuality.Bone4;
+        }
+    }
+
+    void PrepareRenderersForRagdoll()
+    {
+        if (animController != null)
+            animController.cullingMode = AnimatorCullingMode.AlwaysAnimate;
+
+        if (_renderers == null)
+            return;
+
+        for (int i = 0; i < _renderers.Length; i++)
+        {
+            Renderer renderer = _renderers[i];
+            if (renderer == null)
+                continue;
+
+            renderer.allowOcclusionWhenDynamic = false;
+            renderer.motionVectorGenerationMode = MotionVectorGenerationMode.ForceNoMotion;
+            SkinnedMeshRenderer smr = renderer as SkinnedMeshRenderer;
+            if (smr == null)
+                continue;
+
+            smr.updateWhenOffscreen = true;
+            smr.quality = SkinQuality.Bone4;
+            smr.skinnedMotionVectors = false;
+        }
+    }
+
+    void SetRagdollPhysicsSettings()
+    {
+        if (_ragdollBodies == null)
+            return;
+
+        for (int i = 0; i < _ragdollBodies.Length; i++)
+        {
+            Rigidbody rb = _ragdollBodies[i];
+            if (rb == null)
+                continue;
+
+            // Discrete: ContinuousSpeculative + start overlap launches the corpse on mobile
+            rb.collisionDetectionMode = CollisionDetectionMode.Discrete;
+            rb.maxDepenetrationVelocity = MaxDepenetrationSpeed;
+            rb.interpolation = _isExplosionDeath || rb == _hipsBody
+                ? RigidbodyInterpolation.Interpolate
+                : RigidbodyInterpolation.None;
+        }
+    }
+
+    void CacheSkinBones()
+    {
+        int count = 0;
+        if (_renderers != null)
+        {
+            for (int i = 0; i < _renderers.Length; i++)
+            {
+                SkinnedMeshRenderer smr = _renderers[i] as SkinnedMeshRenderer;
+                if (smr == null)
+                    continue;
+
+                if (smr.rootBone != null)
+                    count++;
+
+                Transform[] bones = smr.bones;
+                if (bones == null)
+                    continue;
+
+                for (int b = 0; b < bones.Length; b++)
+                {
+                    if (bones[b] != null)
+                        count++;
+                }
+            }
+        }
+
+        _skinBones = new Transform[count];
+        _skinBoneLocalPositions = new Vector3[count];
+        _skinBoneLocalRotations = new Quaternion[count];
+        int index = 0;
+        if (_renderers == null)
+            return;
+
+        for (int i = 0; i < _renderers.Length; i++)
+        {
+            SkinnedMeshRenderer smr = _renderers[i] as SkinnedMeshRenderer;
+            if (smr == null)
+                continue;
+
+            if (smr.rootBone != null)
+                _skinBones[index++] = smr.rootBone;
+
+            Transform[] bones = smr.bones;
+            if (bones == null)
+                continue;
+
+            for (int b = 0; b < bones.Length; b++)
+            {
+                if (bones[b] != null)
+                    _skinBones[index++] = bones[b];
+            }
+        }
+    }
+
+    void CacheRagdollJoints()
+    {
+        _ragdollJoints = GetComponentsInChildren<CharacterJoint>();
+    }
+
+    void CaptureSkinBonePoses()
+    {
+        if (_skinBones == null)
+            return;
+
+        for (int i = 0; i < _skinBones.Length; i++)
+        {
+            Transform bone = _skinBones[i];
+            if (bone == null)
+                continue;
+
+            _skinBoneLocalPositions[i] = bone.localPosition;
+            _skinBoneLocalRotations[i] = bone.localRotation;
+        }
+    }
+
+    void RestoreSkinBonePoses()
+    {
+        if (_skinBones == null)
+            return;
+
+        for (int i = 0; i < _skinBones.Length; i++)
+        {
+            Transform bone = _skinBones[i];
+            if (bone == null)
+                continue;
+
+            bone.localPosition = _skinBoneLocalPositions[i];
+            bone.localRotation = _skinBoneLocalRotations[i];
+        }
+    }
+
+    void FreezeSkinnedPoseForRagdoll()
+    {
+        if (animController != null)
+        {
+            animController.cullingMode = AnimatorCullingMode.AlwaysAnimate;
+            animController.writeDefaultValuesOnDisable = false;
+            animController.keepAnimatorStateOnDisable = true;
+            animController.speed = 0f;
+            if (animController.enabled)
+                animController.Update(0f);
+        }
+
+        CaptureSkinBonePoses();
+
+        if (animController != null)
+            animController.enabled = false;
+
+        RestoreSkinBonePoses();
+        Physics.SyncTransforms();
+
+        if (_renderers == null)
+            return;
+
+        for (int i = 0; i < _renderers.Length; i++)
+        {
+            SkinnedMeshRenderer smr = _renderers[i] as SkinnedMeshRenderer;
+            if (smr == null)
+                continue;
+
+            smr.forceMatrixRecalculationPerRender = true;
+            smr.updateWhenOffscreen = true;
+            smr.quality = SkinQuality.Bone4;
+        }
+    }
+
+    void RelaxRagdollJoints()
+    {
+        if (_ragdollJoints == null)
+            return;
+
+        for (int i = 0; i < _ragdollJoints.Length; i++)
+        {
+            CharacterJoint joint = _ragdollJoints[i];
+            if (joint == null)
+                continue;
+
+            joint.enableProjection = false;
+        }
+    }
+
+    void IgnoreRagdollExternalCollisions()
+    {
+        if (_ragdollColliders == null)
+            return;
+
+        if (_playerCharacterController != null)
+        {
+            for (int i = 0; i < _ragdollColliders.Length; i++)
+            {
+                Collider ragdollCol = _ragdollColliders[i];
+                if (ragdollCol == null)
+                    continue;
+
+                Physics.IgnoreCollision(ragdollCol, _playerCharacterController, true);
+            }
+        }
+
+        for (int e = 0; e < _activeEnemies.Count; e++)
+        {
+            EnemyController other = _activeEnemies[e];
+            if (other == null || other == this)
+                continue;
+
+            if (other._isDead)
+                continue;
+
+            IgnoreRagdollAgainst(other._rootColliders);
+        }
+    }
+
+    void IgnoreRagdollAgainst(Collider[] others)
+    {
+        if (others == null || _ragdollColliders == null)
+            return;
+
+        for (int i = 0; i < _ragdollColliders.Length; i++)
+        {
+            Collider ragdollCol = _ragdollColliders[i];
+            if (ragdollCol == null)
+                continue;
+
+            for (int j = 0; j < others.Length; j++)
+            {
+                Collider otherCol = others[j];
+                if (otherCol == null)
+                    continue;
+
+                Physics.IgnoreCollision(ragdollCol, otherCol, true);
+            }
+        }
+    }
+
+    void CacheHitCapsule()
+    {
+        CapsuleCollider col = GetComponent<CapsuleCollider>();
+        if (col == null)
+            return;
+
+        float radius = Mathf.Max(0.1f, col.radius);
+        float height = Mathf.Max(col.height, radius * 2f);
+        float half = height * 0.5f;
+        float centerY = col.center.y;
+        _hitCapsuleRadius = radius + HitCapsuleRadiusPadding;
+        _hitCapsuleBottom = centerY - half + radius;
+        _hitCapsuleTop = centerY + half - radius;
+    }
+
+    void CacheHipsBody()
+    {
+        _hipsBody = null;
+        if (_ragdollBodies == null)
+            return;
+
+        for (int i = 0; i < _ragdollBodies.Length; i++)
+        {
+            Rigidbody rb = _ragdollBodies[i];
+            if (rb == null)
+                continue;
+
+            if (rb.gameObject.name.IndexOf("Hips") >= 0)
+            {
+                _hipsBody = rb;
+                return;
+            }
+        }
+    }
+
+    void ApplyPendingExplosion()
+    {
+        if (!_hasPendingExplosion)
+            return;
+
+        _hasPendingExplosion = false;
+        if (_ragdollBodies == null || _pendingExplosionForce <= 0f)
+            return;
+
+        float safeRadius = Mathf.Max(0.01f, _pendingExplosionRadius);
+        // All ragdoll bones — Editor blast. Pose is already frozen so this no longer launches bind-pose overlap.
+        for (int i = 0; i < _ragdollBodies.Length; i++)
+        {
+            Rigidbody rb = _ragdollBodies[i];
+            if (rb == null || rb.isKinematic)
+                continue;
+
+            rb.maxDepenetrationVelocity = MaxDepenetrationSpeed;
+            rb.AddExplosionForce(
+                _pendingExplosionForce,
+                _pendingExplosionPos,
+                safeRadius,
+                _pendingExplosionUpwards,
+                ForceMode.Impulse);
+        }
+    }
+
+    void ClampRagdollSpeed()
+    {
+        if (_ragdollBodies == null)
+            return;
+
+        float maxLinear = _isExplosionDeath ? MaxExplosionRagdollSpeed : MaxRagdollSpeed;
+        float maxAngular = _isExplosionDeath ? MaxExplosionRagdollAngularSpeed : MaxRagdollSpeed;
+        float maxLinearSq = maxLinear * maxLinear;
+        float maxAngularSq = maxAngular * maxAngular;
+        for (int i = 0; i < _ragdollBodies.Length; i++)
+        {
+            Rigidbody rb = _ragdollBodies[i];
+            if (rb == null || rb.isKinematic)
+                continue;
+
+            Vector3 v = rb.linearVelocity;
+            if (v.sqrMagnitude > maxLinearSq)
+                rb.linearVelocity = v.normalized * maxLinear;
+
+            Vector3 av = rb.angularVelocity;
+            if (av.sqrMagnitude > maxAngularSq)
+                rb.angularVelocity = av.normalized * maxAngular;
+        }
+    }
+
+    static float DistanceSegmentSegment(Vector3 p1, Vector3 q1, Vector3 p2, Vector3 q2)
+    {
+        Vector3 d1 = q1 - p1;
+        Vector3 d2 = q2 - p2;
+        Vector3 r = p1 - p2;
+        float a = Vector3.Dot(d1, d1);
+        float e = Vector3.Dot(d2, d2);
+        float f = Vector3.Dot(d2, r);
+        const float eps = 0.000001f;
+
+        float s;
+        float t;
+        if (a <= eps && e <= eps)
+            return Vector3.Distance(p1, p2);
+
+        if (a <= eps)
+        {
+            s = 0f;
+            t = Mathf.Clamp01(f / e);
+        }
+        else
+        {
+            float c = Vector3.Dot(d1, r);
+            if (e <= eps)
+            {
+                t = 0f;
+                s = Mathf.Clamp01(-c / a);
+            }
+            else
+            {
+                float b = Vector3.Dot(d1, d2);
+                float denom = a * e - b * b;
+                s = Mathf.Abs(denom) > eps ? Mathf.Clamp01((b * f - c * e) / denom) : 0f;
+                t = (b * s + f) / e;
+                if (t < 0f)
+                {
+                    t = 0f;
+                    s = Mathf.Clamp01(-c / a);
+                }
+                else if (t > 1f)
+                {
+                    t = 1f;
+                    s = Mathf.Clamp01((b - c) / a);
+                }
+            }
+        }
+
+        Vector3 c1 = p1 + d1 * s;
+        Vector3 c2 = p2 + d2 * t;
+        return Vector3.Distance(c1, c2);
+    }
+
+    void SetRagdollCollidersEnabled(bool enabled)
+    {
+        if (_ragdollColliders == null)
+            return;
+
+        for (int i = 0; i < _ragdollColliders.Length; i++)
+        {
+            if (_ragdollColliders[i] != null)
+                _ragdollColliders[i].enabled = enabled;
+        }
     }
 
     bool PrepareDissolveMaterials()
@@ -650,6 +1193,96 @@ public class EnemyController : MonoBehaviour
         if (_dissolveShader == null || _renderers == null || _renderers.Length == 0)
             return false;
 
+        SetRagdollKinematic(true);
+
+        int skinnedCount = 0;
+        for (int i = 0; i < _renderers.Length; i++)
+        {
+            if (_renderers[i] is SkinnedMeshRenderer)
+                skinnedCount++;
+        }
+
+        if (skinnedCount > 0)
+            return PrepareBakedDissolveMaterials(skinnedCount);
+
+        return PrepareRendererDissolveMaterials();
+    }
+
+    bool PrepareBakedDissolveMaterials(int skinnedCount)
+    {
+        _bakedDissolveMeshes = new Mesh[skinnedCount];
+        int meshIndex = 0;
+        int materialCount = 0;
+
+        for (int i = 0; i < _renderers.Length; i++)
+        {
+            SkinnedMeshRenderer smr = _renderers[i] as SkinnedMeshRenderer;
+            if (smr == null)
+                continue;
+
+            Material[] shared = smr.sharedMaterials;
+            if (shared != null)
+                materialCount += shared.Length;
+        }
+
+        if (materialCount == 0)
+            return false;
+
+        _dissolveMaterials = new Material[materialCount];
+        int writeIndex = 0;
+
+        for (int i = 0; i < _renderers.Length; i++)
+        {
+            SkinnedMeshRenderer smr = _renderers[i] as SkinnedMeshRenderer;
+            if (smr == null)
+                continue;
+
+            Mesh baked = new Mesh();
+            baked.name = "ZombieDissolveBake";
+            smr.BakeMesh(baked, true);
+            _bakedDissolveMeshes[meshIndex++] = baked;
+
+            GameObject bakeGo = new GameObject("DissolveMesh");
+            bakeGo.layer = smr.gameObject.layer;
+            bakeGo.transform.SetParent(smr.transform, false);
+            bakeGo.transform.localPosition = Vector3.zero;
+            bakeGo.transform.localRotation = Quaternion.identity;
+            bakeGo.transform.localScale = Vector3.one;
+
+            MeshFilter meshFilter = bakeGo.AddComponent<MeshFilter>();
+            meshFilter.sharedMesh = baked;
+
+            MeshRenderer meshRenderer = bakeGo.AddComponent<MeshRenderer>();
+            meshRenderer.shadowCastingMode = smr.shadowCastingMode;
+            meshRenderer.receiveShadows = smr.receiveShadows;
+
+            Material[] shared = smr.sharedMaterials;
+            if (shared == null || shared.Length == 0)
+            {
+                smr.enabled = false;
+                continue;
+            }
+
+            Material[] instances = new Material[shared.Length];
+            for (int m = 0; m < shared.Length; m++)
+            {
+                Material dissolveMat = new Material(_dissolveShader);
+                CopySourceAppearance(shared[m], dissolveMat);
+                dissolveMat.SetFloat(DissolveAmountId, 0f);
+                dissolveMat.enableInstancing = false;
+                instances[m] = dissolveMat;
+                _dissolveMaterials[writeIndex++] = dissolveMat;
+            }
+
+            meshRenderer.materials = instances;
+            smr.enabled = false;
+        }
+
+        return writeIndex > 0;
+    }
+
+    bool PrepareRendererDissolveMaterials()
+    {
         int materialCount = 0;
         for (int i = 0; i < _renderers.Length; i++)
         {
@@ -685,6 +1318,7 @@ public class EnemyController : MonoBehaviour
                 Material dissolveMat = new Material(_dissolveShader);
                 CopySourceAppearance(source, dissolveMat);
                 dissolveMat.SetFloat(DissolveAmountId, 0f);
+                dissolveMat.enableInstancing = false;
                 instances[m] = dissolveMat;
                 _dissolveMaterials[writeIndex++] = dissolveMat;
             }
@@ -702,9 +1336,17 @@ public class EnemyController : MonoBehaviour
 
         // Keep the zombie's original texture/color
         if (source.HasProperty(BaseMapId))
+        {
             dissolveMat.SetTexture(BaseMapId, source.GetTexture(BaseMapId));
+            dissolveMat.SetTextureScale(BaseMapId, source.GetTextureScale(BaseMapId));
+            dissolveMat.SetTextureOffset(BaseMapId, source.GetTextureOffset(BaseMapId));
+        }
         else if (source.HasProperty(MainTexId))
+        {
             dissolveMat.SetTexture(BaseMapId, source.GetTexture(MainTexId));
+            dissolveMat.SetTextureScale(BaseMapId, source.GetTextureScale(MainTexId));
+            dissolveMat.SetTextureOffset(BaseMapId, source.GetTextureOffset(MainTexId));
+        }
 
         if (source.HasProperty(BaseColorId))
             dissolveMat.SetColor(BaseColorId, source.GetColor(BaseColorId));
@@ -806,14 +1448,22 @@ public class EnemyController : MonoBehaviour
 
     void OnDestroy()
     {
-        // Destroy material instances to avoid leaks
-        if (_dissolveMaterials == null)
+        if (_dissolveMaterials != null)
+        {
+            for (int i = 0; i < _dissolveMaterials.Length; i++)
+            {
+                if (_dissolveMaterials[i] != null)
+                    Destroy(_dissolveMaterials[i]);
+            }
+        }
+
+        if (_bakedDissolveMeshes == null)
             return;
 
-        for (int i = 0; i < _dissolveMaterials.Length; i++)
+        for (int i = 0; i < _bakedDissolveMeshes.Length; i++)
         {
-            if (_dissolveMaterials[i] != null)
-                Destroy(_dissolveMaterials[i]);
+            if (_bakedDissolveMeshes[i] != null)
+                Destroy(_bakedDissolveMeshes[i]);
         }
     }
 }

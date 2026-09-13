@@ -25,6 +25,7 @@ public class GameplayManager : MonoBehaviour
     float _timeSpawnCountdown;
     float _playTimeCountdown;
     bool _gameEnded;
+    int _lastDisplayedSeconds = int.MinValue;
 
     PlayerController _playerController;
     Transform _uiParent;
@@ -40,6 +41,8 @@ public class GameplayManager : MonoBehaviour
 
     void Awake()
     {
+        ApplyRuntimeFrameSettings();
+
         // Cache Player + Canvas (do not Find in Update)
         _playerController = FindFirstObjectByType<PlayerController>();
         Canvas canvas = FindFirstObjectByType<Canvas>();
@@ -276,13 +279,31 @@ public class GameplayManager : MonoBehaviour
         levelTxt.text = $"Level {_userConfig.level}";
     }
 
+    /// <summary>
+    /// Editor: PC quality. Device: lock 60 FPS without overriding Mobile LOD/aniso.
+    /// </summary>
+    static void ApplyRuntimeFrameSettings()
+    {
+#if UNITY_EDITOR
+        QualitySettings.SetQualityLevel(1, true);
+#else
+        QualitySettings.vSyncCount = 0;
+        Application.targetFrameRate = 60;
+        QualitySettings.skinWeights = SkinWeights.FourBones;
+        Screen.sleepTimeout = SleepTimeout.NeverSleep;
+#endif
+    }
+
     void RefreshPlayTimeTxt()
     {
         if (playTime == null)
             return;
 
-        // Display mm:ss
         int totalSeconds = Mathf.Max(0, Mathf.CeilToInt(_playTimeCountdown));
+        if (totalSeconds == _lastDisplayedSeconds)
+            return;
+
+        _lastDisplayedSeconds = totalSeconds;
         int minutes = totalSeconds / 60;
         int seconds = totalSeconds % 60;
         playTime.text = $"{minutes:00}:{seconds:00}";

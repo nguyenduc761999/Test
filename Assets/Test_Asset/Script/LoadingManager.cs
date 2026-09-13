@@ -22,6 +22,12 @@ public class LoadingManager : MonoBehaviour
 
     void Awake()
     {
+#if !UNITY_EDITOR
+        QualitySettings.vSyncCount = 0;
+        Application.targetFrameRate = 60;
+        Screen.sleepTimeout = SleepTimeout.NeverSleep;
+#endif
+
         if (_soundConfig != null)
             SoundManager.Ensure(_soundConfig).PlayBgm(SoundConfig.BgmLoading);
     }

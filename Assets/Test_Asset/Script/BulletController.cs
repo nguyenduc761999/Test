@@ -1,14 +1,17 @@
 using UnityEngine;
 
 /// <summary>
-/// Bullet flies in a straight line; on Enemy hit, applies damage then Destroy.
+/// Bullet flies in a straight line from the muzzle; on Enemy hit, applies damage then Destroy.
+/// Hits use the enemy transform capsule along that path (PhysX triggers tunnel on mobile).
 /// </summary>
 [RequireComponent(typeof(Rigidbody))]
 [RequireComponent(typeof(SphereCollider))]
 public class BulletController : MonoBehaviour
 {
     const float LifetimeSeconds = 5f;
-    const float ColliderRadius = 0.08f;
+    const float ColliderRadius = 0.15f;
+    const float MaxStepDistance = 0.25f;
+    const float MaxDeltaTime = 0.03333334f;
 
     float _speed;
     float _damage;
@@ -26,6 +29,7 @@ public class BulletController : MonoBehaviour
 
     /// <summary>
     /// Sets damage / speed / flight direction from WeaponConfig at spawn.
+    /// Direction is fixed at spawn — the bullet does not home in flight.
     /// </summary>
     public void Init(float damage, float speed, Vector3 direction)
     {
@@ -46,22 +50,58 @@ public class BulletController : MonoBehaviour
         if (!_initialized || _hit)
             return;
 
-        transform.position += _direction * _speed * Time.deltaTime;
+        float dt = Time.deltaTime;
+        if (dt > MaxDeltaTime)
+            dt = MaxDeltaTime;
+
+        float remaining = _speed * dt;
+        if (remaining <= 0f)
+            return;
+
+        Vector3 origin = transform.position;
+        while (remaining > 0f)
+        {
+            float step = remaining > MaxStepDistance ? MaxStepDistance : remaining;
+            Vector3 next = origin + _direction * step;
+            if (TryHitAlong(origin, next))
+                return;
+
+            origin = next;
+            remaining -= step;
+        }
+
+        transform.position = origin;
+        if (_rigidbody != null)
+            _rigidbody.position = origin;
     }
 
-    void OnTriggerEnter(Collider other)
+    bool TryHitAlong(Vector3 from, Vector3 to)
     {
-        if (_hit || other == null)
-            return;
+        int count = EnemyController.ActiveEnemyCount;
+        for (int i = 0; i < count; i++)
+        {
+            EnemyController enemy = EnemyController.GetActiveEnemy(i);
+            if (enemy == null || enemy.die)
+                continue;
 
-        EnemyController enemy = other.GetComponentInParent<EnemyController>();
-        if (enemy == null)
-            return;
+            if (!enemy.HitByShot(from, to, ColliderRadius))
+                continue;
+
+            return ApplyHit(enemy);
+        }
+
+        return false;
+    }
+
+    bool ApplyHit(EnemyController enemy)
+    {
+        if (_hit || enemy == null)
+            return false;
 
         _hit = true;
-        // Pass the bullet transform so the Enemy can spawn hitVFX opposite the flight direction
         enemy.TakeDamage(_damage, transform);
         Destroy(gameObject);
+        return true;
     }
 
     void EnsurePhysicsComponents()
@@ -73,7 +113,10 @@ public class BulletController : MonoBehaviour
 
         _rigidbody.isKinematic = true;
         _rigidbody.useGravity = false;
-        _rigidbody.collisionDetectionMode = CollisionDetectionMode.ContinuousSpeculative;
+        _rigidbody.detectCollisions = false;
+        _rigidbody.interpolation = RigidbodyInterpolation.Interpolate;
+        _rigidbody.constraints = RigidbodyConstraints.FreezeRotation;
+        _rigidbody.collisionDetectionMode = CollisionDetectionMode.Discrete;
 
         if (_collider == null)
             _collider = GetComponent<SphereCollider>();
@@ -81,6 +124,7 @@ public class BulletController : MonoBehaviour
             _collider = gameObject.AddComponent<SphereCollider>();
 
         _collider.isTrigger = true;
+        _collider.enabled = false;
         _collider.radius = ColliderRadius;
     }
 

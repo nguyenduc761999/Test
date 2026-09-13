@@ -16,16 +16,13 @@ public class GrenadeController : MonoBehaviour
     /// <summary>Explosion radius (aim AoE).</summary>
     public float RangeExplosion => Mathf.Max(0f, rangeExplosion);
 
-    const float ExplosionForce = 32f;
-    const float ExplosionUpwards = 1.2f;
+    const float ExplosionForce = 14f;
+    const float ExplosionUpwards = 0.5f;
     const float MinFlightTime = 0.45f;
     const float MaxFlightTime = 1.4f;
     const string PlaneName = "Plane";
-    const int EnemyHitBufferSize = 32;
 
     Rigidbody _rb;
-    LayerMask _enemyLayerMask;
-    Collider[] _enemyHits;
     bool _exploded;
     bool _launched;
 
@@ -46,9 +43,6 @@ public class GrenadeController : MonoBehaviour
         _rb.interpolation = RigidbodyInterpolation.Interpolate;
         _rb.isKinematic = true;
         _rb.useGravity = true;
-
-        _enemyLayerMask = LayerMask.GetMask("Enemy");
-        _enemyHits = new Collider[EnemyHitBufferSize];
     }
 
     /// <summary>
@@ -143,24 +137,20 @@ public class GrenadeController : MonoBehaviour
         if (explosionVFX != null)
             Instantiate(explosionVFX, pos, Quaternion.identity);
 
-        int hitCount = Physics.OverlapSphereNonAlloc(
-            pos,
-            RangeExplosion,
-            _enemyHits,
-            _enemyLayerMask);
-
-        for (int i = 0; i < hitCount; i++)
+        float range = RangeExplosion;
+        float rangeSq = range * range;
+        int count = EnemyController.ActiveEnemyCount;
+        for (int i = 0; i < count; i++)
         {
-            Collider hit = _enemyHits[i];
-            if (hit == null)
+            EnemyController enemy = EnemyController.GetActiveEnemy(i);
+            if (enemy == null || enemy.die)
                 continue;
 
-            EnemyController enemy = hit.GetComponentInParent<EnemyController>();
-            if (enemy == null)
+            Vector3 chest = enemy.transform.position + Vector3.up * 0.9f;
+            if ((chest - pos).sqrMagnitude > rangeSq)
                 continue;
 
-            enemy.DieFromExplosion(pos, ExplosionForce, RangeExplosion, ExplosionUpwards);
-            _enemyHits[i] = null;
+            enemy.DieFromExplosion(pos, ExplosionForce, range, ExplosionUpwards);
         }
 
         Destroy(gameObject);
