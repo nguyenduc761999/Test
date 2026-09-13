@@ -3,7 +3,7 @@ using UnityEditorInternal;
 using UnityEngine;
 
 /// <summary>
-/// Test Manager → Enemy Manager: quản lý EnemyConfig (thêm/xóa, prefab + damage + health).
+/// Test Manager → Enemy Manager: manage EnemyConfig (add/remove, prefab + damage + health).
 /// </summary>
 public class EnemyManagerWindow : EditorWindow
 {
@@ -37,7 +37,7 @@ public class EnemyManagerWindow : EditorWindow
 
         if (_enemyConfig == null)
         {
-            EditorGUILayout.HelpBox("Chưa gán EnemyConfig. Gán hoặc tạo mới phía trên.", MessageType.Warning);
+            EditorGUILayout.HelpBox("No EnemyConfig assigned. Assign or create one above.", MessageType.Warning);
             return;
         }
 
@@ -152,21 +152,21 @@ public class EnemyManagerWindow : EditorWindow
 
         float y = rect.y;
 
-        // Hàng 1: Prefab + Delete
+        // Row 1: Prefab + Delete
         DrawLabeledObject(rect.x, y, rect.width - buttonW - gap, labelW, "Prefab", prefabProp, typeof(GameObject));
         Rect deleteRect = new Rect(rect.x + rect.width - buttonW, y, buttonW, line);
         if (GUI.Button(deleteRect, "Delete"))
             TryDeleteEnemy(listProp, index);
         y += line + gap;
 
-        // Hàng 2: Damage
+        // Row 2: Damage
         Rect dmgLabelRect = new Rect(rect.x, y, labelW, line);
         Rect dmgFieldRect = new Rect(dmgLabelRect.xMax + gap, y, rect.width - labelW - gap, line);
         EditorGUI.LabelField(dmgLabelRect, "Damage");
         damageProp.floatValue = Mathf.Max(0f, EditorGUI.FloatField(dmgFieldRect, damageProp.floatValue));
         y += line + gap;
 
-        // Hàng 3: Health
+        // Row 3: Health
         Rect hpLabelRect = new Rect(rect.x, y, labelW, line);
         Rect hpFieldRect = new Rect(hpLabelRect.xMax + gap, y, rect.width - labelW - gap, line);
         EditorGUI.LabelField(hpLabelRect, "Health");
@@ -200,7 +200,7 @@ public class EnemyManagerWindow : EditorWindow
 
         bool confirmed = EditorUtility.DisplayDialog(
             "Delete Enemy",
-            $"Xóa \"{displayName}\" khỏi EnemyConfig?",
+            $"Delete \"{displayName}\" from EnemyConfig?",
             "Delete",
             "Cancel");
 

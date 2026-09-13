@@ -55,6 +55,24 @@ public class SoundConfig : ScriptableObject
     [SerializeField] List<SoundEntry> _sfxList = new List<SoundEntry>();
     [SerializeField] List<SoundEntry> _buttonList = new List<SoundEntry>();
 
+    public const string BgmLoading = "BgmLoading";
+    public const string BgmGameplay = "BgmGameplay";
+    public const string SfxFire = "Fire";
+    public const string SfxFireFast = "FireFast";
+    public const string SfxFireHeavy = "FireHeavy";
+    public const string SfxGrenadeThrow = "GrenadeThrow";
+    public const string SfxGrenadeExplosion = "GrenadeExplosion";
+    public const string SfxFleshHit = "FleshHit";
+    public const string SfxWeaponSwitch = "WeaponSwitch";
+    public const string SfxZombieAttack = "ZombieAttack";
+    public const string SfxZombieDie = "ZombieDie";
+    public const string SfxZombieSpawn = "ZombieSpawn";
+    public const string SfxPlayerHit = "PlayerHit";
+    public const string SfxPlayerDie = "PlayerDie";
+    public const string SfxWin = "Win";
+    public const string SfxLose = "Lose";
+    public const string ButtonClick = "ButtonClick";
+
     public List<SoundEntry> BgmList => _bgmList;
     public List<SoundEntry> SfxList => _sfxList;
     public List<SoundEntry> ButtonList => _buttonList;
@@ -78,16 +96,37 @@ public class SoundConfig : ScriptableObject
     }
 
     /// <summary>
-    /// Tìm SFX theo tên hiển thị trong danh sách.
+    /// Finds an SFX by display name in the list.
     /// </summary>
     public SoundEntry FindSfxByName(string soundName)
     {
-        if (string.IsNullOrEmpty(soundName) || _sfxList == null)
+        return FindInList(_sfxList, soundName);
+    }
+
+    /// <summary>
+    /// Finds a BGM by display name in the list.
+    /// </summary>
+    public SoundEntry FindBgmByName(string soundName)
+    {
+        return FindInList(_bgmList, soundName);
+    }
+
+    /// <summary>
+    /// Finds a Button sound by display name in the list.
+    /// </summary>
+    public SoundEntry FindButtonByName(string soundName)
+    {
+        return FindInList(_buttonList, soundName);
+    }
+
+    static SoundEntry FindInList(List<SoundEntry> list, string soundName)
+    {
+        if (string.IsNullOrEmpty(soundName) || list == null)
             return null;
 
-        for (int i = 0; i < _sfxList.Count; i++)
+        for (int i = 0; i < list.Count; i++)
         {
-            SoundEntry entry = _sfxList[i];
+            SoundEntry entry = list[i];
             if (entry != null && entry.Name == soundName)
                 return entry;
         }
@@ -97,7 +136,7 @@ public class SoundConfig : ScriptableObject
 }
 
 /// <summary>
-/// Đánh dấu field string chọn SFX từ SoundConfig trên cùng component.
+/// Marks a string field that picks an SFX from SoundConfig on the same component.
 /// </summary>
 public class SfxSoundAttribute : PropertyAttribute
 {

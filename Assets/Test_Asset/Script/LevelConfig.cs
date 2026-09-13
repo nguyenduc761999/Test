@@ -4,14 +4,14 @@ using UnityEngine;
 using UnityEngine.Scripting;
 
 /// <summary>
-/// Một level: thời gian spawn zombie + thời gian chơi + danh sách prefab zombie (spawn random).
+/// One level: zombie spawn interval + play time + zombie prefab list (random spawn).
 /// </summary>
 [Serializable]
 [Preserve]
 public class LevelEntry
 {
     [SerializeField] float _timeSpawnZombie = 5f;
-    [SerializeField] float _playTime = 60f;
+    [SerializeField] float _playTime = 180f;
     [SerializeField] List<GameObject> _zombiePrefabs = new List<GameObject>();
 
     public float TimeSpawnZombie
@@ -20,7 +20,7 @@ public class LevelEntry
         set => _timeSpawnZombie = Mathf.Max(0f, value);
     }
 
-    /// <summary>Thời gian chơi đếm ngược (giây) của level.</summary>
+    /// <summary>Level countdown duration in seconds.</summary>
     public float PlayTime
     {
         get => _playTime;
@@ -30,7 +30,7 @@ public class LevelEntry
     public List<GameObject> ZombiePrefabs => _zombiePrefabs;
 
     /// <summary>
-    /// Lấy ngẫu nhiên 1 prefab zombie trong list (bỏ qua null).
+    /// Picks a random zombie prefab from the list (skips null).
     /// </summary>
     public GameObject GetRandomZombiePrefab()
     {
@@ -65,7 +65,7 @@ public class LevelEntry
 }
 
 /// <summary>
-/// Danh sách cấu hình level — thêm/xóa phần tử trên Inspector hoặc qua LevelManager.
+/// Level config list — add/remove entries in the Inspector or via LevelManager.
 /// </summary>
 [CreateAssetMenu(fileName = "LevelConfig", menuName = "Test/Level Config", order = 4)]
 [Preserve]
@@ -76,7 +76,7 @@ public class LevelConfig : ScriptableObject
     public List<LevelEntry> Levels => _levels;
 
     /// <summary>
-    /// Lấy level theo chỉ số (khớp UserConfig.currentLevel).
+    /// Gets a level by index (matches UserConfig.currentLevel).
     /// </summary>
     public LevelEntry GetLevel(int index)
     {
@@ -87,9 +87,9 @@ public class LevelConfig : ScriptableObject
     }
 
     /// <summary>
-    /// Thêm một level vào danh sách.
+    /// Adds a level to the list.
     /// </summary>
-    public LevelEntry Add(float timeSpawnZombie, float playTime = 60f, List<GameObject> zombiePrefabs = null)
+    public LevelEntry Add(float timeSpawnZombie, float playTime = 180f, List<GameObject> zombiePrefabs = null)
     {
         if (_levels == null)
             _levels = new List<LevelEntry>();
@@ -114,7 +114,7 @@ public class LevelConfig : ScriptableObject
     }
 
     /// <summary>
-    /// Xóa phần tử theo chỉ số.
+    /// Removes an entry by index.
     /// </summary>
     public bool RemoveAt(int index)
     {

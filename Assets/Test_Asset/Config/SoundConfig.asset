@@ -12,9 +12,60 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 87b5eea606549a34cb9be8a5e2755fff, type: 3}
   m_Name: SoundConfig
   m_EditorClassIdentifier: Assembly-CSharp::SoundConfig
-  _bgmList: []
+  _bgmList:
+  - _name: BgmLoading
+    _clip: {fileID: 8300000, guid: c4e91a2b3d5f6784a1b2c3d4e5f60001, type: 3}
+    _volume: 0.58
+  - _name: BgmGameplay
+    _clip: {fileID: 8300000, guid: c4e91a2b3d5f6784a1b2c3d4e5f60002, type: 3}
+    _volume: 0.55
   _sfxList:
   - _name: Fire
     _clip: {fileID: 8300000, guid: 1b145bcffd767854fb0c71c37678ebaa, type: 3}
+    _volume: 0.72
+  - _name: FireFast
+    _clip: {fileID: 8300000, guid: f19e3fdb9c8082647a2c32beca28ba84, type: 3}
+    _volume: 0.52
+  - _name: FireHeavy
+    _clip: {fileID: 8300000, guid: 1df1429981f76644097c7fd47fc5f239, type: 3}
+    _volume: 0.78
+  - _name: GrenadeThrow
+    _clip: {fileID: 8300000, guid: c4e91a2b3d5f6784a1b2c3d4e5f60005, type: 3}
+    _volume: 0.75
+  - _name: GrenadeExplosion
+    _clip: {fileID: 8300000, guid: 6349a640dc07c3b4389c205f5b5a5145, type: 3}
+    _volume: 0.9
+  - _name: FleshHit
+    _clip: {fileID: 8300000, guid: b771cd0787c16e64e8e8ba11c3c83734, type: 3}
+    _volume: 0.6
+  - _name: WeaponSwitch
+    _clip: {fileID: 8300000, guid: af63539a5e39c99489395bdea2471f60, type: 3}
+    _volume: 0.7
+  - _name: ZombieAttack
+    _clip: {fileID: 8300000, guid: 168c9a5ac7025814ea9c89e5098a3cad, type: 3}
+    _volume: 0.75
+  - _name: ZombieDie
+    _clip: {fileID: 8300000, guid: 1d92c5ac0e056b045b4461b147f95be5, type: 3}
+    _volume: 0.82
+  - _name: ZombieSpawn
+    _clip: {fileID: 8300000, guid: ceb2474913e8b5e40b17213af473d784, type: 3}
+    _volume: 0.48
+  - _name: PlayerHit
+    _clip: {fileID: 8300000, guid: bd67058a6079faf40b2dbfb35ea160b1, type: 3}
+    _volume: 0.7
+  - _name: PlayerDie
+    _clip: {fileID: 8300000, guid: 5e00c8451ea2f524faf2f8a6aa900971, type: 3}
+    _volume: 0.8
+  - _name: Win
+    _clip: {fileID: 8300000, guid: c4e91a2b3d5f6784a1b2c3d4e5f60003, type: 3}
+    _volume: 0.8
+  - _name: Lose
+    _clip: {fileID: 8300000, guid: c4e91a2b3d5f6784a1b2c3d4e5f60004, type: 3}
+    _volume: 0.8
+  - _name: ButtonClick
+    _clip: {fileID: 8300000, guid: 406c929b7299afb469c82778f8d15d5b, type: 3}
     _volume: 1
-  _buttonList: []
+  _buttonList:
+  - _name: ButtonClick
+    _clip: {fileID: 8300000, guid: 406c929b7299afb469c82778f8d15d5b, type: 3}
+    _volume: 1

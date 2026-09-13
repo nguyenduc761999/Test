@@ -54,7 +54,7 @@ Shader "Custom/EnemyDissolve"
                 float2 uv : TEXCOORD0;
             };
 
-            // Noise đơn giản theo UV (không cần texture phụ)
+            // Simple UV noise (no extra texture needed)
             float Hash21(float2 p)
             {
                 p = frac(p * float2(123.34, 456.21));
@@ -76,10 +76,10 @@ Shader "Custom/EnemyDissolve"
                 float noise = Hash21(input.uv * 48.0);
                 float dissolve = _DissolveAmount;
 
-                // Cắt dần mesh theo noise
+                // Clip the mesh gradually using noise
                 clip(noise - dissolve);
 
-                // Viền cháy gần mép dissolve
+                // Burn edge near the dissolve cutoff
                 float edge = dissolve + _EdgeWidth;
                 if (noise < edge)
                 {

@@ -4,7 +4,7 @@ using UnityEditor;
 #endif
 
 /// <summary>
-/// Lựu đạn: bay vòng cung tới điểm aim, nổ khi chạm Plane.
+/// Grenade: flies in an arc to the aim point, explodes on Plane contact.
 /// </summary>
 [RequireComponent(typeof(Rigidbody))]
 [RequireComponent(typeof(SphereCollider))]
@@ -13,7 +13,7 @@ public class GrenadeController : MonoBehaviour
     [SerializeField] GameObject explosionVFX;
     [SerializeField] float rangeExplosion = 2.5f;
 
-    /// <summary>Bán kính vùng nổ (aim AoE).</summary>
+    /// <summary>Explosion radius (aim AoE).</summary>
     public float RangeExplosion => Mathf.Max(0f, rangeExplosion);
 
     const float ExplosionForce = 32f;
@@ -52,7 +52,7 @@ public class GrenadeController : MonoBehaviour
     }
 
     /// <summary>
-    /// Phóng lựu theo quỹ đạo đạn đạo tới targetWorldPos.
+    /// Launches the grenade on a ballistic arc toward targetWorldPos.
     /// </summary>
     public void Init(Vector3 targetWorldPos)
     {
@@ -61,7 +61,7 @@ public class GrenadeController : MonoBehaviour
 
         Vector3 start = transform.position;
         Vector3 end = targetWorldPos;
-        // Đáp trên mặt đất — giữ Y đích ổn định
+        // Land on the ground — keep target Y stable
         Vector3 velocity = CalculateLaunchVelocity(start, end);
 
         _rb.isKinematic = false;
@@ -71,7 +71,7 @@ public class GrenadeController : MonoBehaviour
         _launched = true;
         _exploded = false;
 
-        // Fallback: nếu bay lâu không chạm Plane (lọt khe) → nổ gần điểm đích
+        // Fallback: if it flies too long without hitting Plane (fell through a gap) → explode near the target
         WatchLandingAsync(end);
     }
 
@@ -85,7 +85,7 @@ public class GrenadeController : MonoBehaviour
             Vector3 pos = transform.position;
             Vector3 flat = pos - target;
             flat.y = 0f;
-            // Gần đích + sát đất → nổ
+            // Near the target and close to the ground → explode
             if (flat.sqrMagnitude <= 0.35f * 0.35f && pos.y <= target.y + 0.35f)
             {
                 Explode();
@@ -138,6 +138,7 @@ public class GrenadeController : MonoBehaviour
         }
 
         Vector3 pos = transform.position;
+        SoundManager.Instance?.PlaySfxAt(SoundConfig.SfxGrenadeExplosion, pos);
 
         if (explosionVFX != null)
             Instantiate(explosionVFX, pos, Quaternion.identity);
@@ -166,14 +167,14 @@ public class GrenadeController : MonoBehaviour
     }
 
     /// <summary>
-    /// Vận tốc ban đầu để rơi đúng điểm đích dưới gravity.
+    /// Initial velocity so it lands on the target under gravity.
     /// </summary>
     static Vector3 CalculateLaunchVelocity(Vector3 start, Vector3 end)
     {
         Vector3 toTarget = end - start;
         Vector3 flat = new Vector3(toTarget.x, 0f, toTarget.z);
         float horizontal = flat.magnitude;
-        // Thời gian bay tỷ lệ khoảng cách — cung rõ hơn khi ném xa
+        // Flight time scales with distance — a clearer arc when thrown farther
         float flightTime = Mathf.Clamp(
             Mathf.Lerp(MinFlightTime, MaxFlightTime, horizontal / 10f),
             MinFlightTime,
@@ -185,7 +186,7 @@ public class GrenadeController : MonoBehaviour
         Vector3 gravity = Physics.gravity;
         Vector3 velocity = (toTarget - 0.5f * gravity * flightTime * flightTime) / flightTime;
 
-        // Thêm loft nhẹ để luôn có vòng cung nhìn thấy
+        // Extra loft so an arc is always visible
         if (velocity.y < 2f)
             velocity.y = 2f + horizontal * 0.15f;
 
@@ -204,7 +205,7 @@ public class GrenadeController : MonoBehaviour
         float newRange = Handles.RadiusHandle(Quaternion.identity, transform.position, Mathf.Max(0f, rangeExplosion));
         if (!Mathf.Approximately(newRange, rangeExplosion))
         {
-            Undo.RecordObject(this, "Chỉnh Range Explosion");
+            Undo.RecordObject(this, "Edit Range Explosion");
             rangeExplosion = Mathf.Max(0f, newRange);
             EditorUtility.SetDirty(this);
         }

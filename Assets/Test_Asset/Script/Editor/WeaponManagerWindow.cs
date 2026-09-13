@@ -177,7 +177,7 @@ public class WeaponManagerWindow : EditorWindow
 
         float y = rect.y;
 
-        // Row 0: Icon preview lớn + ObjectField + Delete
+        // Row 0: large icon preview + ObjectField + Delete
         DrawIconRow(rect.x, y, rect.width, labelW, buttonW, gap, line, iconProp, () => TryDeleteWeapon(listProp, index));
         y += IconPreviewSize + gap;
 
@@ -244,7 +244,7 @@ public class WeaponManagerWindow : EditorWindow
         Sprite icon = iconProp.objectReferenceValue as Sprite;
         if (icon != null && icon.texture != null)
         {
-            // Vẽ đúng vùng UV của sprite trong atlas / texture
+            // Draw the sprite's UV region from the atlas / texture
             Rect texRect = icon.textureRect;
             Rect uv = new Rect(
                 texRect.x / icon.texture.width,
@@ -258,7 +258,7 @@ public class WeaponManagerWindow : EditorWindow
             GUI.Label(previewRect, "No Icon", EditorStyles.centeredGreyMiniLabel);
         }
 
-        // Viền preview để icon nổi rõ
+        // Preview outline so the icon stands out
         Handles.BeginGUI();
         Handles.color = new Color(0.55f, 0.55f, 0.55f, 1f);
         Handles.DrawSolidRectangleWithOutline(previewRect, Color.clear, Handles.color);

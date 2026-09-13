@@ -18,22 +18,22 @@ MonoBehaviour:
     _bulletPrefab: {fileID: 567885737954886950, guid: 0f3881ffd6be2d64e946be7cc8f5a1dc, type: 3}
     _fireVfx: {fileID: 100002, guid: bc8d2212c2ce5ef459edd17d2d63da64, type: 3}
     _sound: Fire
-    _damage: 15
-    _bulletSpeed: 20
+    _damage: 14
+    _bulletSpeed: 22
     _fireSpeed: 1
   - _icon: {fileID: 21300000, guid: e75f673aca233ba4e9c88d3a3f940622, type: 3}
     _gunPrefab: {fileID: 2559746148873707959, guid: 2583097f26bf75949b266dcbee96f998, type: 3}
     _bulletPrefab: {fileID: 567885737954886950, guid: 0f3881ffd6be2d64e946be7cc8f5a1dc, type: 3}
     _fireVfx: {fileID: 100002, guid: bc8d2212c2ce5ef459edd17d2d63da64, type: 3}
-    _sound: Fire
-    _damage: 10
-    _bulletSpeed: 20
+    _sound: FireFast
+    _damage: 8
+    _bulletSpeed: 26
     _fireSpeed: 2
   - _icon: {fileID: 21300000, guid: df0db3c69a3a30b44b5b754eced1c274, type: 3}
     _gunPrefab: {fileID: 3627888253766354257, guid: 34cafd5440a3db94c95f508973490887, type: 3}
     _bulletPrefab: {fileID: 567885737954886950, guid: 0f3881ffd6be2d64e946be7cc8f5a1dc, type: 3}
     _fireVfx: {fileID: 100002, guid: bc8d2212c2ce5ef459edd17d2d63da64, type: 3}
-    _sound: Fire
-    _damage: 20
-    _bulletSpeed: 20
-    _fireSpeed: 2.5
+    _sound: FireHeavy
+    _damage: 22
+    _bulletSpeed: 18
+    _fireSpeed: 0.65

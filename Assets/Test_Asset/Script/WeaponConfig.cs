@@ -4,7 +4,7 @@ using UnityEngine;
 using UnityEngine.Scripting;
 
 /// <summary>
-/// Một vũ khí: icon, gun, bullet, VFX, sound SFX, damage, bullet speed, fire speed anim.
+/// One weapon: icon, gun, bullet, VFX, SFX, damage, bullet speed, fire-speed anim.
 /// </summary>
 [Serializable]
 [Preserve]
@@ -61,7 +61,7 @@ public class WeaponEntry
         set => _bulletSpeed = Mathf.Max(0f, value);
     }
 
-    /// <summary>Tốc độ phát anim infantry_combat_shoot.</summary>
+    /// <summary>Playback speed of the infantry_combat_shoot anim.</summary>
     public float FireSpeed
     {
         get => _fireSpeed;
@@ -70,7 +70,7 @@ public class WeaponEntry
 }
 
 /// <summary>
-/// Danh sách cấu hình vũ khí dùng bởi Weapon Manager / Player.
+/// Weapon config list used by Weapon Manager / Player.
 /// </summary>
 [CreateAssetMenu(fileName = "WeaponConfig", menuName = "Test/Weapon Config", order = 2)]
 [Preserve]
@@ -81,7 +81,7 @@ public class WeaponConfig : ScriptableObject
     public List<WeaponEntry> Weapons => _weapons;
 
     /// <summary>
-    /// Tìm weapon theo prefab súng (so khớp reference).
+    /// Finds a weapon by gun prefab (reference match).
     /// </summary>
     public WeaponEntry FindByGunPrefab(GameObject gunPrefab)
     {

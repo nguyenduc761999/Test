@@ -13,11 +13,27 @@ MonoBehaviour:
   m_Name: LevelConfig
   m_EditorClassIdentifier: Assembly-CSharp::LevelConfig
   _levels:
-  - _timeSpawnZombie: 3
-    _playTime: 10
+  - _timeSpawnZombie: 5
+    _playTime: 180
     _zombiePrefabs:
     - {fileID: 5972432009619242558, guid: 95ddc2cf570e86240a229f81b6acc58b, type: 3}
-  - _timeSpawnZombie: 2
-    _playTime: 20
+  - _timeSpawnZombie: 4.2
+    _playTime: 180
+    _zombiePrefabs:
+    - {fileID: 5972432009619242558, guid: 95ddc2cf570e86240a229f81b6acc58b, type: 3}
+  - _timeSpawnZombie: 3.5
+    _playTime: 180
+    _zombiePrefabs:
+    - {fileID: 5972432009619242558, guid: 95ddc2cf570e86240a229f81b6acc58b, type: 3}
+  - _timeSpawnZombie: 2.8
+    _playTime: 180
+    _zombiePrefabs:
+    - {fileID: 5972432009619242558, guid: 95ddc2cf570e86240a229f81b6acc58b, type: 3}
+  - _timeSpawnZombie: 2.3
+    _playTime: 180
+    _zombiePrefabs:
+    - {fileID: 5972432009619242558, guid: 95ddc2cf570e86240a229f81b6acc58b, type: 3}
+  - _timeSpawnZombie: 1.9
+    _playTime: 180
     _zombiePrefabs:
     - {fileID: 5972432009619242558, guid: 95ddc2cf570e86240a229f81b6acc58b, type: 3}

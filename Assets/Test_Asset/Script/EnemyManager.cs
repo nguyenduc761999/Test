@@ -5,7 +5,7 @@ using UnityEditor;
 #endif
 
 /// <summary>
-/// Quản lý EnemyConfig runtime: thêm/xóa phần tử, tra cứu damage/health theo prefab.
+/// Runtime EnemyConfig manager: add/remove entries and look up damage/health by prefab.
 /// </summary>
 public class EnemyManager : MonoBehaviour
 {
@@ -20,7 +20,7 @@ public class EnemyManager : MonoBehaviour
     public List<EnemyEntry> Enemies => _enemyConfig != null ? _enemyConfig.Enemies : null;
 
     /// <summary>
-    /// Thêm phần tử (prefab + damage + health) vào EnemyConfig.
+    /// Adds an entry (prefab + damage + health) to EnemyConfig.
     /// </summary>
     public EnemyEntry AddEnemy(GameObject prefab, float damage, float health = 100f)
     {
@@ -31,7 +31,7 @@ public class EnemyManager : MonoBehaviour
     }
 
     /// <summary>
-    /// Xóa phần tử theo chỉ số trong EnemyConfig.
+    /// Removes an entry from EnemyConfig by index.
     /// </summary>
     public bool RemoveEnemy(int index)
     {
@@ -42,7 +42,7 @@ public class EnemyManager : MonoBehaviour
     }
 
     /// <summary>
-    /// Lấy entry theo prefab gốc.
+    /// Gets the entry for the original prefab.
     /// </summary>
     public EnemyEntry FindByPrefab(GameObject prefab)
     {
@@ -50,7 +50,7 @@ public class EnemyManager : MonoBehaviour
     }
 
     /// <summary>
-    /// Lấy entry theo instance đang spawn.
+    /// Gets the entry for a spawned instance.
     /// </summary>
     public EnemyEntry FindByInstance(GameObject instance)
     {

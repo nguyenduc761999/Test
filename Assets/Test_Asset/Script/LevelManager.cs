@@ -5,7 +5,7 @@ using UnityEditor;
 #endif
 
 /// <summary>
-/// Quản lý LevelConfig runtime: thêm/xóa phần tử, tra cứu level theo chỉ số.
+/// Runtime LevelConfig manager: add/remove entries and look up a level by index.
 /// </summary>
 public class LevelManager : MonoBehaviour
 {
@@ -20,7 +20,7 @@ public class LevelManager : MonoBehaviour
     public List<LevelEntry> Levels => _levelConfig != null ? _levelConfig.Levels : null;
 
     /// <summary>
-    /// Lấy level theo chỉ số (map từ UserConfig.level qua modulo).
+    /// Gets a level by index (mapped from UserConfig.level via modulo).
     /// </summary>
     public LevelEntry GetLevel(int index)
     {
@@ -28,9 +28,9 @@ public class LevelManager : MonoBehaviour
     }
 
     /// <summary>
-    /// Thêm phần tử (timeSpawnZombie + playTime + list prefab) vào LevelConfig.
+    /// Adds an entry (timeSpawnZombie + playTime + prefab list) to LevelConfig.
     /// </summary>
-    public LevelEntry AddLevel(float timeSpawnZombie, float playTime = 60f, List<GameObject> zombiePrefabs = null)
+    public LevelEntry AddLevel(float timeSpawnZombie, float playTime = 180f, List<GameObject> zombiePrefabs = null)
     {
         if (_levelConfig == null)
             return null;
@@ -39,7 +39,7 @@ public class LevelManager : MonoBehaviour
     }
 
     /// <summary>
-    /// Xóa phần tử theo chỉ số trong LevelConfig.
+    /// Removes an entry from LevelConfig by index.
     /// </summary>
     public bool RemoveLevel(int index)
     {

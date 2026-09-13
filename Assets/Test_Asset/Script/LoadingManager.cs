@@ -1,17 +1,30 @@
 using UnityEngine;
 using UnityEngine.SceneManagement;
 using UnityEngine.UI;
+#if UNITY_EDITOR
+using UnityEditor;
+#endif
 
 /// <summary>
-/// LoadingScene: cập nhật fillAmount rồi chuyển sang Gameplay khi đầy.
+/// LoadingScene: updates fillAmount then loads Gameplay when full.
 /// </summary>
 public class LoadingManager : MonoBehaviour
 {
     public Image loadingBarImage;
+    [SerializeField] SoundConfig _soundConfig;
 
     const string GameplaySceneName = "Gameplay";
-    /// <summary>Thời gian tối thiểu (giây) để thanh không đầy quá nhanh.</summary>
+    /// <summary>Minimum duration in seconds so the bar does not fill too quickly.</summary>
     const float MinLoadDuration = 3.5f;
+#if UNITY_EDITOR
+    const string SoundConfigAssetPath = "Assets/Test_Asset/Config/SoundConfig.asset";
+#endif
+
+    void Awake()
+    {
+        if (_soundConfig != null)
+            SoundManager.Ensure(_soundConfig).PlayBgm(SoundConfig.BgmLoading);
+    }
 
     void Start()
     {
@@ -30,7 +43,7 @@ public class LoadingManager : MonoBehaviour
         AsyncOperation loadOp = SceneManager.LoadSceneAsync(GameplaySceneName);
         if (loadOp == null)
         {
-            Debug.LogError("Không load được scene Gameplay. Kiểm tra Build Settings.");
+            Debug.LogError("Failed to load the Gameplay scene. Check Build Settings.");
             return;
         }
 
@@ -43,12 +56,12 @@ public class LoadingManager : MonoBehaviour
         {
             elapsed += Time.deltaTime;
 
-            // AsyncOperation.progress dừng ở 0.9 trước khi activate
+            // AsyncOperation.progress stops at 0.9 until the scene is activated
             float loadProgress = Mathf.Clamp01(loadOp.progress / 0.9f);
             float timeProgress = Mathf.Clamp01(elapsed / MinLoadDuration);
             float targetFill = Mathf.Min(loadProgress, timeProgress);
 
-            // Làm mượt fillAmount, tránh nhảy đột ngột
+            // Smooth fillAmount to avoid sudden jumps
             displayFill = Mathf.MoveTowards(displayFill, targetFill, Time.deltaTime * 0.45f);
 
             if (loadingBarImage != null)
@@ -65,4 +78,22 @@ public class LoadingManager : MonoBehaviour
             await Awaitable.NextFrameAsync();
         }
     }
+
+#if UNITY_EDITOR
+    void Reset()
+    {
+        LoadSoundConfig();
+    }
+
+    void OnValidate()
+    {
+        if (_soundConfig == null)
+            LoadSoundConfig();
+    }
+
+    void LoadSoundConfig()
+    {
+        _soundConfig = AssetDatabase.LoadAssetAtPath<SoundConfig>(SoundConfigAssetPath);
+    }
+#endif
 }

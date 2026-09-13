@@ -154,4 +154,4 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::GrenadeController
   explosionVFX: {fileID: 100002, guid: 4bf22a1d8d9e7724b9af67921436851d, type: 3}
-  rangeExplosion: 2.5
+  rangeExplosion: 2.8

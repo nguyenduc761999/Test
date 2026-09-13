@@ -1,7 +1,7 @@
 using UnityEngine;
 
 /// <summary>
-/// Đạn bay thẳng; trúng Enemy thì gây damage rồi Destroy.
+/// Bullet flies in a straight line; on Enemy hit, applies damage then Destroy.
 /// </summary>
 [RequireComponent(typeof(Rigidbody))]
 [RequireComponent(typeof(SphereCollider))]
@@ -25,7 +25,7 @@ public class BulletController : MonoBehaviour
     }
 
     /// <summary>
-    /// Gán damage / tốc độ / hướng bay từ WeaponConfig lúc spawn.
+    /// Sets damage / speed / flight direction from WeaponConfig at spawn.
     /// </summary>
     public void Init(float damage, float speed, Vector3 direction)
     {
@@ -59,7 +59,7 @@ public class BulletController : MonoBehaviour
             return;
 
         _hit = true;
-        // Truyền transform đạn để Enemy spawn hitVFX ngược hướng bay
+        // Pass the bullet transform so the Enemy can spawn hitVFX opposite the flight direction
         enemy.TakeDamage(_damage, transform);
         Destroy(gameObject);
     }

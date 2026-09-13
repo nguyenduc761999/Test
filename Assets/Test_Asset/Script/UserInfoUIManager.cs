@@ -2,7 +2,7 @@ using UnityEngine;
 using UnityEngine.UI;
 
 /// <summary>
-/// UI máu Player: Fill Amount + ghost drain + rung healthBG khi nhận damage.
+/// Player health UI: Fill Amount + ghost drain + healthBG shake on damage.
 /// </summary>
 public class UserInfoUIManager : MonoBehaviour
 {
@@ -24,7 +24,7 @@ public class UserInfoUIManager : MonoBehaviour
 
     void Awake()
     {
-        // Tìm Player (prefab instance trên scene) nếu chưa gán
+        // Find the Player (scene prefab instance) if not assigned
         if (playerController == null)
             playerController = FindFirstObjectByType<PlayerController>();
 
@@ -38,7 +38,7 @@ public class UserInfoUIManager : MonoBehaviour
 
     void Start()
     {
-        // Sync sau Awake của PlayerController (đã Load UserConfig.health)
+        // Sync after PlayerController.Awake (UserConfig.health already loaded)
         ApplyFill(GetHealthFill(), true);
     }
 
@@ -55,7 +55,7 @@ public class UserInfoUIManager : MonoBehaviour
     }
 
     /// <summary>
-    /// Tỉ lệ máu hiện tại / max từ PlayerController.
+    /// Current / max health ratio from PlayerController.
     /// </summary>
     float GetHealthFill()
     {
@@ -70,7 +70,7 @@ public class UserInfoUIManager : MonoBehaviour
     }
 
     /// <summary>
-    /// Cập nhật healthBar ngay; ghostHealth giảm trễ nếu không instant.
+    /// Updates healthBar immediately; ghostHealth drains with delay unless instant.
     /// </summary>
     void ApplyFill(float fill, bool instantGhost)
     {
@@ -92,7 +92,7 @@ public class UserInfoUIManager : MonoBehaviour
     }
 
     /// <summary>
-    /// Ghost fillAmount giảm dần theo healthBar.
+    /// Drains ghost fillAmount toward healthBar.
     /// </summary>
     async Awaitable DrainGhostAsync()
     {
@@ -115,7 +115,7 @@ public class UserInfoUIManager : MonoBehaviour
     }
 
     /// <summary>
-    /// Rung chấn healthBG khi bị đánh.
+    /// Shakes healthBG when hit.
     /// </summary>
     async Awaitable ShakeHealthBgAsync()
     {
@@ -155,7 +155,7 @@ public class UserInfoUIManager : MonoBehaviour
     }
 
     /// <summary>
-    /// Tự gắn HeathBar / HeathBG / GhostHealth trong hierarchy.
+    /// Auto-binds HeathBar / HeathBG / GhostHealth in the hierarchy.
     /// </summary>
     void TryAutoBindImages()
     {

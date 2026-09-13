@@ -14,5 +14,5 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::EnemyConfig
   _enemies:
   - _prefab: {fileID: 5972432009619242558, guid: 95ddc2cf570e86240a229f81b6acc58b, type: 3}
-    _damage: 10
-    _health: 30
+    _damage: 12
+    _health: 40

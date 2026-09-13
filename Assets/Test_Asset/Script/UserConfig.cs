@@ -5,7 +5,7 @@ using UnityEngine;
 using UnityEngine.Scripting;
 
 /// <summary>
-/// Dữ liệu save/load của UserConfig (JSON tại persistentDataPath).
+/// UserConfig save/load payload (JSON at persistentDataPath).
 /// </summary>
 [Serializable]
 [Preserve]
@@ -22,25 +22,25 @@ public class UserConfigSaveData
 }
 
 /// <summary>
-/// Cấu hình tiến trình người chơi: điểm, level, inventory súng.
+/// Player progress config: score, level, gun inventory.
 /// </summary>
 [CreateAssetMenu(fileName = "UserConfig", menuName = "Test/User Config", order = 1)]
 [Preserve]
 public class UserConfig : ScriptableObject
 {
-    public int currentScore;
-    public int highScore;
-    public int currentLevel;
-    /// <summary>Level user đang ở (1-based, tăng liên tục khi Next Level kể cả sau level config cuối).</summary>
+    public int currentScore = 0;
+    public int highScore = 0;
+    public int currentLevel = 0;
+    /// <summary>Current user level (1-based, keeps increasing on Next Level even past the last config entry).</summary>
     public int level = 1;
-    public int health;
-    /// <summary>Chỉ số phần tử Inventory đang dùng làm vũ khí.</summary>
-    public int WeaponUse;
+    public int health = 100;
+    /// <summary>Inventory index currently equipped as the weapon.</summary>
+    public int WeaponUse = 0;
     public List<GameObject> Inventory = new List<GameObject>();
-    /// <summary>Prefab lựu đạn trong inventory.</summary>
+    /// <summary>Grenade prefab in inventory.</summary>
     public GameObject grenade;
 
-    /// <summary>Prefab grenade đã gán trên asset — giữ khi Load để match lại theo tên.</summary>
+    /// <summary>Grenade prefab assigned on the asset — kept on Load so it can be rematched by name.</summary>
     GameObject _grenadeAssetRef;
 
     const string SaveFileName = "userconfig.json";
@@ -54,7 +54,23 @@ public class UserConfig : ScriptableObject
     }
 
     /// <summary>
-    /// Lưu toàn bộ field UserConfig ra persistentDataPath.
+    /// Resets score/level/health to initial values. Inventory (3 guns) and grenade stay unchanged.
+    /// </summary>
+    public void ResetToInitial()
+    {
+        currentScore = 0;
+        highScore = 0;
+        currentLevel = 0;
+        level = 1;
+        health = 100;
+        WeaponUse = 0;
+        ClampWeaponUse();
+        SyncLevelFields();
+        Save();
+    }
+
+    /// <summary>
+    /// Saves every UserConfig field to persistentDataPath.
     /// </summary>
     public void Save()
     {
@@ -87,12 +103,12 @@ public class UserConfig : ScriptableObject
         }
         catch (Exception e)
         {
-            Debug.LogWarning($"UserConfig.Save thất bại: {e.Message}");
+            Debug.LogWarning($"UserConfig.Save failed: {e.Message}");
         }
     }
 
     /// <summary>
-    /// Khôi phục toàn bộ field UserConfig từ persistentDataPath.
+    /// Restores every UserConfig field from persistentDataPath.
     /// </summary>
     public void Load()
     {
@@ -109,7 +125,7 @@ public class UserConfig : ScriptableObject
             currentScore = data.currentScore;
             highScore = data.highScore;
             currentLevel = data.currentLevel;
-            // Save cũ chưa có level → suy từ currentLevel (0-based)
+            // Older saves have no level field — derive it from currentLevel (0-based)
             level = data.level > 0 ? data.level : Mathf.Max(1, data.currentLevel + 1);
             health = data.health;
             WeaponUse = data.WeaponUse;
@@ -120,12 +136,12 @@ public class UserConfig : ScriptableObject
         }
         catch (Exception e)
         {
-            Debug.LogWarning($"UserConfig.Load thất bại: {e.Message}");
+            Debug.LogWarning($"UserConfig.Load failed: {e.Message}");
         }
     }
 
     /// <summary>
-    /// Khôi phục grenade theo tên đã lưu, giữ reference prefab trên asset.
+    /// Restores grenade by saved name, keeping the prefab reference on the asset.
     /// </summary>
     void RestoreGrenade(string savedName)
     {
@@ -153,7 +169,7 @@ public class UserConfig : ScriptableObject
     }
 
     /// <summary>
-    /// Sắp xếp lại Inventory theo tên đã lưu, giữ reference prefab trên asset.
+    /// Reorders Inventory by saved names, keeping prefab references on the asset.
     /// </summary>
     void RestoreInventory(List<string> savedNames)
     {
@@ -187,13 +203,13 @@ public class UserConfig : ScriptableObject
             Inventory.Add(match);
         }
 
-        // Giữ phần tử còn lại trên asset (chưa có trong file save)
+        // Keep remaining asset entries that were not in the save file
         for (int i = 0; i < source.Count; i++)
             Inventory.Add(source[i]);
     }
 
     /// <summary>
-    /// Đồng bộ level (1-based) với currentLevel (0-based progress).
+    /// Syncs level (1-based) with currentLevel (0-based progress).
     /// </summary>
     public void SyncLevelFields()
     {
@@ -204,7 +220,7 @@ public class UserConfig : ScriptableObject
     }
 
     /// <summary>
-    /// Giữ WeaponUse trong phạm vi Inventory.
+    /// Clamps WeaponUse to the Inventory range.
     /// </summary>
     public void ClampWeaponUse()
     {
@@ -222,7 +238,7 @@ public class UserConfig : ScriptableObject
 
 #if UNITY_EDITOR
     /// <summary>
-    /// Menu ba chấm trên Inspector → Save thay đổi ra persistentDataPath.
+    /// Inspector kebab menu → Save changes to persistentDataPath.
     /// </summary>
     [ContextMenu("Save")]
     void SaveFromInspector()
@@ -232,7 +248,19 @@ public class UserConfig : ScriptableObject
         Save();
         UnityEditor.EditorUtility.SetDirty(this);
         UnityEditor.AssetDatabase.SaveAssets();
-        Debug.Log($"UserConfig đã Save: {SavePath}");
+        Debug.Log($"UserConfig saved: {SavePath}");
+    }
+
+    /// <summary>
+    /// Inspector kebab menu → reset to initial values, keep 3 guns.
+    /// </summary>
+    [ContextMenu("Reset To Initial")]
+    void ResetToInitialFromInspector()
+    {
+        ResetToInitial();
+        UnityEditor.EditorUtility.SetDirty(this);
+        UnityEditor.AssetDatabase.SaveAssets();
+        Debug.Log($"UserConfig ResetToInitial, kept {Inventory?.Count ?? 0} guns: {SavePath}");
     }
 #endif
 }

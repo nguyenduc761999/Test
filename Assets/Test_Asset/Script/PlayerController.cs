@@ -17,30 +17,30 @@ public class PlayerController : MonoBehaviour
     AudioSource _audioSource;
     CharacterController _characterController;
 
-    [SerializeField] float _rangeAttack = 3f;
-    [SerializeField] float rangeGrenade = 8f;
+    [SerializeField] float _rangeAttack = 10f;
+    [SerializeField] float rangeGrenade = 12f;
 
     [SerializeField] Transform gunLocation;
     Transform fireLocation;
 
     WeaponEntry _currentWeapon;
 
-    /// <summary>Máu hiện tại — khởi tạo từ UserConfig, trừ khi nhận damage.</summary>
+    /// <summary>Current health — initialized from UserConfig, reduced on damage.</summary>
     [SerializeField] int health;
 
-    /// <summary>VFX khi bị Zombie đánh trúng — spawn tại vị trí Player, xoay ngược hướng tấn công.</summary>
+    /// <summary>VFX when hit by a Zombie — spawn at the Player position, rotated opposite the attack direction.</summary>
     [SerializeField] GameObject hitVFX;
 
-    /// <summary>Máu tối đa lúc bắt đầu (sau Load UserConfig).</summary>
+    /// <summary>Max health at start (after Load UserConfig).</summary>
     int _maxHealth = 1;
 
-    /// <summary>Máu hiện tại của Player.</summary>
+    /// <summary>Current Player health.</summary>
     public int Health => health;
 
-    /// <summary>Máu tối đa để UI tính Fill Amount.</summary>
+    /// <summary>Max health used by UI Fill Amount.</summary>
     public int MaxHealth => _maxHealth;
 
-    /// <summary>Bắn khi health đổi (damage / chết).</summary>
+    /// <summary>Fired when health changes (damage / death).</summary>
     public event System.Action HealthChanged;
 
     [SerializeField] float _ragdollWaitSeconds = 2f;
@@ -81,6 +81,7 @@ public class PlayerController : MonoBehaviour
     Renderer[] _renderers;
     Material[] _dissolveMaterials;
     bool _isDead;
+    bool _movementLocked;
     float _verticalVelocity;
 
     Camera _mainCamera;
@@ -91,12 +92,12 @@ public class PlayerController : MonoBehaviour
     LineRenderer _aoeRing;
     RaycastHit[] _groundHits;
 
-    /// <summary>Player đã chết (health &lt;= 0).</summary>
+    /// <summary>Player is dead (health &lt;= 0).</summary>
     public bool IsDead => _isDead;
 
     void Awake()
     {
-        // Cache CharacterController — Move() mới va chạm collider (Translate thì xuyên tường)
+        // Cache CharacterController — Move() collides with colliders (Translate goes through walls)
         _characterController = GetComponent<CharacterController>();
         if (_characterController == null)
             _characterController = gameObject.AddComponent<CharacterController>();
@@ -107,24 +108,24 @@ public class PlayerController : MonoBehaviour
         _characterController.skinWidth = 0.08f;
         _characterController.minMoveDistance = 0f;
 
-        // Lấy model con của Character khi vào Play
+        // Get the Character child model when entering Play
         Transform character = transform.Find("Character");
         if (character != null && character.childCount > 0)
             _characterModel = character.GetChild(0).gameObject;
 
-        // Cache Animator của characterModel
+        // Cache Animator on characterModel
         if (_characterModel != null)
         {
             _animController = _characterModel.GetComponent<Animator>();
             if (_animController != null)
             {
                 _upperBodyLayerIndex = _animController.GetLayerIndex("UpperBody");
-                // CharacterController điều khiển vị trí — root motion Y của anim Run sẽ nâng cả player
+                // CharacterController drives position — Run anim root-motion Y would lift the whole player
                 _animController.applyRootMotion = false;
             }
         }
 
-        // Cache FixedJoystick trên scene
+        // Cache FixedJoystick on the scene
         _fixedJoystick = FindFirstObjectByType<FixedJoystick>();
 
         _enemyLayerMask = LayerMask.GetMask("Enemy");
@@ -135,12 +136,18 @@ public class PlayerController : MonoBehaviour
         _audioSource = GetComponent<AudioSource>();
         if (_audioSource == null)
             _audioSource = gameObject.AddComponent<AudioSource>();
+        _audioSource.playOnAwake = false;
+        _audioSource.spatialBlend = 0f;
+        _audioSource.loop = false;
 
-        // Khôi phục tiến trình rồi gắn súng đầu inventory
+        if (_soundConfig != null)
+            SoundManager.Ensure(_soundConfig);
+
+        // Restore progress then equip the first inventory gun
         if (_userConfig != null)
             _userConfig.Load();
 
-        // Cache ragdoll / renderer giống Zombie để die cùng kiểu
+        // Cache ragdoll / renderer like Zombie so death uses the same flow
         _ragdollBodies = GetComponentsInChildren<Rigidbody>();
         _renderers = GetComponentsInChildren<Renderer>();
         CacheRagdollColliders();
@@ -151,7 +158,7 @@ public class PlayerController : MonoBehaviour
         if (_dissolveShader == null)
             _dissolveShader = Shader.Find("Custom/EnemyDissolve");
 
-        // health lấy từ UserConfig sau Load
+        // health comes from UserConfig after Load
         health = _userConfig != null ? _userConfig.health : 0;
         _maxHealth = Mathf.Max(1, health);
 
@@ -177,6 +184,13 @@ public class PlayerController : MonoBehaviour
         if (_isDead || _characterModel == null)
             return;
 
+        // Win: stand still, do not run / do not shoot
+        if (_movementLocked)
+        {
+            HoldLockedPose();
+            return;
+        }
+
         float horizontal = 0f;
         float vertical = 0f;
         bool isRunning = false;
@@ -187,26 +201,26 @@ public class PlayerController : MonoBehaviour
             isRunning = horizontal != 0f || vertical != 0f;
         }
 
-        // Bật/tắt bool Run theo trạng thái joystick
+        // Toggle the Run bool from joystick state
         if (_animController != null)
             _animController.SetBool("Run", isRunning);
 
-        // Tìm Enemy gần nhất trong rangeAttack
+        // Find the nearest Enemy inside rangeAttack
         Transform nearestEnemy = FindNearestEnemy();
         bool hasEnemy = nearestEnemy != null;
 
-        // UpperBody: có Enemy trong range thì Weight = 1, ngược lại = 0
+        // UpperBody: Weight = 1 if an Enemy is in range, otherwise 0
         if (_animController != null && _upperBodyLayerIndex >= 0)
             _animController.SetLayerWeight(_upperBodyLayerIndex, hasEnemy ? 1f : 0f);
 
-        // Có Enemy trong rangeAttack thì bật Shoot, ngược lại tắt
+        // Enable Shoot if an Enemy is in rangeAttack, otherwise disable
         if (_animController != null)
             _animController.SetBool("Shoot", hasEnemy);
 
-        // Phát SFX + VFX mỗi khi bắt đầu chu kỳ anim shoot
+        // Play SFX + VFX each time a shoot anim cycle starts
         TryPlayFireSoundOnShootStart();
 
-        // Có Enemy trong range: khóa cứng hướng nhìn, không xoay theo di chuyển
+        // Enemy in range: lock facing, do not rotate with movement
         if (hasEnemy)
         {
             Vector3 lookDirection = nearestEnemy.position - _characterModel.transform.position;
@@ -214,7 +228,7 @@ public class PlayerController : MonoBehaviour
             if (lookDirection.sqrMagnitude > 0.0001f)
                 _characterModel.transform.rotation = Quaternion.LookRotation(lookDirection);
         }
-        // Hết Enemy trong range mới xoay theo hướng di chuyển
+        // Only rotate with movement once no Enemy is in range
         else if (isRunning)
         {
             Vector3 lookDirection = new Vector3(horizontal, 0f, vertical);
@@ -231,7 +245,7 @@ public class PlayerController : MonoBehaviour
             if (isRunning)
                 move = new Vector3(horizontal, 0f, vertical) * MoveSpeed;
 
-            // Không có gravity thì va đất/zombie/xương ragdoll đẩy Y — bay dần lên trời
+            // Without gravity, ground/zombie/ragdoll bone hits push Y — slowly floats into the air
             if (_characterController.isGrounded)
                 _verticalVelocity = GroundStickVelocity;
             else
@@ -246,11 +260,47 @@ public class PlayerController : MonoBehaviour
     }
 
     /// <summary>
-    /// Bắt đầu aim lựu đạn kiểu Liên Quân (indicator tại Player).
+    /// Win: lock movement + aim, keep gravity so the player does not drift.
+    /// </summary>
+    public void LockMovement()
+    {
+        if (_isDead)
+            return;
+
+        _movementLocked = true;
+        CancelGrenadeAim();
+        HoldLockedPose();
+    }
+
+    void HoldLockedPose()
+    {
+        if (_animController != null)
+        {
+            _animController.SetBool("Run", false);
+            _animController.SetBool("Shoot", false);
+            if (_upperBodyLayerIndex >= 0)
+                _animController.SetLayerWeight(_upperBodyLayerIndex, 0f);
+        }
+
+        if (_characterController == null || !_characterController.enabled)
+            return;
+
+        if (_characterController.isGrounded)
+            _verticalVelocity = GroundStickVelocity;
+        else
+            _verticalVelocity += Physics.gravity.y * Time.deltaTime;
+
+        Vector3 move = Vector3.zero;
+        move.y = _verticalVelocity;
+        _characterController.Move(move * Time.deltaTime);
+    }
+
+    /// <summary>
+    /// Starts Arena-of-Valor-style grenade aim (indicator at the Player).
     /// </summary>
     public void BeginGrenadeAim()
     {
-        if (_isDead || _userConfig == null || _userConfig.grenade == null)
+        if (_isDead || _movementLocked || _userConfig == null || _userConfig.grenade == null)
             return;
 
         if (_mainCamera == null)
@@ -260,15 +310,15 @@ public class PlayerController : MonoBehaviour
         EnsureAimIndicators();
         _grenadeAiming = true;
 
-        // Chạm nút: aim tại chân Player, kéo mới lệch hướng
+        // Button press: aim at the Player's feet, only offset after dragging
         _grenadeAimPoint = ProjectToGround(transform.position);
         SetAimIndicatorsVisible(true);
         RefreshGrenadeAimIndicators();
     }
 
     /// <summary>
-    /// Aim theo offset kéo từ tâm nút skill (kiểu Liên Quân):
-    /// kéo trái/phải/lên/xuống trên màn hình → trái/phải/trước/sau theo Camera.
+    /// Aim from a drag offset on the skill button (Arena of Valor style):
+    /// left/right/up/down on screen → left/right/forward/back relative to the Camera.
     /// </summary>
     public void UpdateGrenadeAimByDrag(Vector2 screenDeltaFromBtn, float maxDragPixels)
     {
@@ -298,7 +348,7 @@ public class PlayerController : MonoBehaviour
         else
             camRight.Normalize();
 
-        // screen X → camRight, screen Y → camForward (kéo lên = phía trước camera)
+        // screen X → camRight, screen Y → camForward (drag up = camera forward)
         Vector3 worldDir = camRight * screenDeltaFromBtn.x + camForward * screenDeltaFromBtn.y;
         if (worldDir.sqrMagnitude > 0.0001f)
             worldDir.Normalize();
@@ -312,7 +362,7 @@ public class PlayerController : MonoBehaviour
     }
 
     /// <summary>
-    /// Hủy aim, ẩn indicator.
+    /// Cancels aim and hides the indicator.
     /// </summary>
     public void CancelGrenadeAim()
     {
@@ -321,7 +371,7 @@ public class PlayerController : MonoBehaviour
     }
 
     /// <summary>
-    /// Thả tay: ẩn indicator và ném lựu tới điểm aim.
+    /// Finger up: hide the indicator and throw the grenade to the aim point.
     /// </summary>
     public void ConfirmGrenadeThrow()
     {
@@ -343,7 +393,7 @@ public class PlayerController : MonoBehaviour
 
         Vector3 spawnPos = transform.position + Vector3.up * GrenadeSpawnHeight;
         Vector3 landing = ProjectToGround(targetWorldPos);
-        // Đảm bảo điểm đáp không trùng spawn (tránh vận tốc NaN / đứng yên)
+        // Keep the landing point from matching spawn (avoids NaN velocity / standing still)
         Vector3 flat = landing - spawnPos;
         flat.y = 0f;
         if (flat.sqrMagnitude < 0.01f)
@@ -359,6 +409,7 @@ public class PlayerController : MonoBehaviour
 
         IgnoreGrenadePlayerCollision(instance);
         controller.Init(landing);
+        SoundManager.Instance?.PlaySfx(SoundConfig.SfxGrenadeThrow);
     }
 
     Vector3 GetDefaultThrowForward()
@@ -463,10 +514,11 @@ public class PlayerController : MonoBehaviour
 
     void EnsureAimIndicators()
     {
+        // Olive / rust — matches the military HUD
         if (_maxRangeRing == null)
-            _maxRangeRing = CreateAimRing("GrenadeMaxRangeRing", new Color(0.2f, 0.85f, 1f, 0.85f), 0.06f);
+            _maxRangeRing = CreateAimRing("GrenadeMaxRangeRing", new Color(0.45f, 0.50f, 0.28f, 0.92f), 0.12f);
         if (_aoeRing == null)
-            _aoeRing = CreateAimRing("GrenadeAoeRing", new Color(1f, 0.85f, 0.2f, 0.9f), 0.05f);
+            _aoeRing = CreateAimRing("GrenadeAoeRing", new Color(0.82f, 0.38f, 0.16f, 0.95f), 0.10f);
     }
 
     LineRenderer CreateAimRing(string objectName, Color color, float width)
@@ -478,6 +530,7 @@ public class PlayerController : MonoBehaviour
         lr.useWorldSpace = true;
         lr.positionCount = AimRingSegments;
         lr.widthMultiplier = width;
+        lr.alignment = LineAlignment.View;
         lr.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
         lr.receiveShadows = false;
         lr.material = new Material(Shader.Find("Sprites/Default"));
@@ -526,7 +579,7 @@ public class PlayerController : MonoBehaviour
     }
 
     /// <summary>
-    /// Xóa súng cũ (nếu có) rồi spawn theo WeaponUse trong Inventory.
+    /// Destroys the old gun (if any) then spawns the Inventory WeaponUse gun.
     /// </summary>
     public void EquipInventoryWeapon()
     {
@@ -562,7 +615,7 @@ public class PlayerController : MonoBehaviour
         if (found != null)
             fireLocation = found;
 
-        // Lấy sound / Fire VFX theo WeaponConfig của súng đang dùng
+        // Sound / Fire VFX from WeaponConfig of the equipped gun
         if (_weaponConfig != null)
             _currentWeapon = _weaponConfig.FindByGunPrefab(gunPrefab);
 
@@ -570,7 +623,7 @@ public class PlayerController : MonoBehaviour
     }
 
     /// <summary>
-    /// Gán speed anim infantry_combat_shoot theo fireSpeed của weapon đang dùng.
+    /// Sets infantry_combat_shoot anim speed from the equipped weapon's fireSpeed.
     /// </summary>
     void ApplyCurrentWeaponFireSpeed()
     {
@@ -582,7 +635,7 @@ public class PlayerController : MonoBehaviour
     }
 
     /// <summary>
-    /// Tìm transform con theo tên (đệ quy).
+    /// Finds a child transform by name (recursive).
     /// </summary>
     static Transform FindChildByName(Transform root, string targetName)
     {
@@ -603,7 +656,7 @@ public class PlayerController : MonoBehaviour
     }
 
     /// <summary>
-    /// Khi UpperBody bắt đầu (hoặc lặp lại) state shoot thì phát sound + spawn Fire VFX từ WeaponConfig.
+    /// When UpperBody starts (or loops) the shoot state, play sound + spawn Fire VFX from WeaponConfig.
     /// </summary>
     void TryPlayFireSoundOnShootStart()
     {
@@ -641,7 +694,7 @@ public class PlayerController : MonoBehaviour
         if (_currentWeapon == null || _currentWeapon.FireVfx == null || fireLocation == null)
             return;
 
-        // Khớp world pos/rot/scale của fireLocation, rồi tách khỏi hierarchy
+        // Match fireLocation world pos/rot/scale, then unparent from the hierarchy
         GameObject vfx = Instantiate(_currentWeapon.FireVfx, fireLocation);
         Transform t = vfx.transform;
         t.localPosition = Vector3.zero;
@@ -651,7 +704,7 @@ public class PlayerController : MonoBehaviour
     }
 
     /// <summary>
-    /// Spawn Prefab Bullet tại vị trí/hướng FireLocation của prefab gun (không làm con).
+    /// Spawns Prefab Bullet at the gun prefab's FireLocation pos/rot (not parented).
     /// </summary>
     void SpawnBullet()
     {
@@ -691,7 +744,7 @@ public class PlayerController : MonoBehaviour
 #if UNITY_EDITOR
     void Reset()
     {
-        // Gán sẵn config mặc định khi gắn component
+        // Assign a default config when the component is added
         _soundConfig = AssetDatabase.LoadAssetAtPath<SoundConfig>(SoundConfigAssetPath);
         _userConfig = AssetDatabase.LoadAssetAtPath<UserConfig>(UserConfigAssetPath);
         _weaponConfig = AssetDatabase.LoadAssetAtPath<WeaponConfig>(WeaponConfigAssetPath);
@@ -709,7 +762,7 @@ public class PlayerController : MonoBehaviour
 #endif
 
     /// <summary>
-    /// Nhận damage từ enemy — trừ health; spawn hitVFX ngược hướng tấn công.
+    /// Takes enemy damage — subtract health; spawn hitVFX opposite the attack direction.
     /// </summary>
     public void TakeDamage(float damage, Transform attacker = null)
     {
@@ -726,11 +779,18 @@ public class PlayerController : MonoBehaviour
         HealthChanged?.Invoke();
 
         if (health <= 0)
+        {
+            SoundManager.Instance?.PlaySfx(SoundConfig.SfxPlayerDie);
             ApplyDie();
+        }
+        else
+        {
+            SoundManager.Instance?.PlaySfx(SoundConfig.SfxPlayerHit);
+        }
     }
 
     /// <summary>
-    /// Spawn hitVFX tại vị trí Player; hướng xoay = ngược forward của attacker (Zombie).
+    /// Spawns hitVFX at the Player position; rotation faces opposite the attacker's (Zombie) forward.
     /// </summary>
     void SpawnHitVfx(Transform attacker)
     {
@@ -750,7 +810,7 @@ public class PlayerController : MonoBehaviour
     }
 
     /// <summary>
-    /// Chết giống Zombie: tắt control → ragdoll → dissolve → Destroy.
+    /// Dies like a Zombie: disable control → ragdoll → dissolve → Destroy.
     /// </summary>
     void ApplyDie()
     {
@@ -760,7 +820,7 @@ public class PlayerController : MonoBehaviour
         _isDead = true;
         health = 0;
 
-        // Tắt CharacterController trước — capsule gốc đụng xương sẽ đẩy văng
+        // Disable CharacterController first — root capsule hitting bones would launch the body
         if (_characterController != null)
             _characterController.enabled = false;
 
@@ -788,7 +848,7 @@ public class PlayerController : MonoBehaviour
 
     async Awaitable ApplyDieRagdollAsync()
     {
-        // Chờ 1 frame để CharacterController/collider gốc chắc chắn tắt
+        // Wait 1 frame so CharacterController/root collider is fully off
         await Awaitable.NextFrameAsync();
         if (this == null)
             return;
@@ -916,7 +976,7 @@ public class PlayerController : MonoBehaviour
             if (rb == null)
                 continue;
 
-            // Xóa vận tốc dư + hạn chế lực đẩy khi depenetration (tránh văng)
+            // Clear leftover velocity + limit depenetration push (avoids launch)
             rb.linearVelocity = Vector3.zero;
             rb.angularVelocity = Vector3.zero;
             rb.maxDepenetrationVelocity = 1f;
@@ -925,7 +985,7 @@ public class PlayerController : MonoBehaviour
                 rb.WakeUp();
         }
 
-        // Sống: tắt collider xương — CC.Move đụng xương → đẩy bay. Chết: bật lại cho ragdoll
+        // Alive: disable bone colliders — CC.Move hitting bones launches. Dead: re-enable for ragdoll
         if (_ragdollColliders == null)
             return;
 
@@ -1061,12 +1121,12 @@ public class PlayerController : MonoBehaviour
 #if UNITY_EDITOR
     void OnDrawGizmosSelected()
     {
-        // Kéo gizmo hình cầu để chỉnh rangeAttack trên Scene
+        // Drag the sphere gizmo to edit rangeAttack in the Scene view
         Handles.color = new Color(1f, 0.3f, 0.2f, 0.9f);
         float newRange = Handles.RadiusHandle(Quaternion.identity, transform.position, Mathf.Max(0f, _rangeAttack));
         if (!Mathf.Approximately(newRange, _rangeAttack))
         {
-            Undo.RecordObject(this, "Chỉnh Range Attack");
+            Undo.RecordObject(this, "Edit Range Attack");
             _rangeAttack = Mathf.Max(0f, newRange);
             EditorUtility.SetDirty(this);
         }
@@ -1076,19 +1136,19 @@ public class PlayerController : MonoBehaviour
         Gizmos.color = new Color(1f, 0.3f, 0.2f, 0.9f);
         Gizmos.DrawWireSphere(transform.position, _rangeAttack);
 
-        // Gizmo rangeGrenade (màu cyan)
-        Handles.color = new Color(0.2f, 0.85f, 1f, 0.9f);
+        // rangeGrenade gizmo (olive — matches HUD)
+        Handles.color = new Color(0.45f, 0.50f, 0.28f, 0.9f);
         float newGrenadeRange = Handles.RadiusHandle(Quaternion.identity, transform.position, Mathf.Max(0f, rangeGrenade));
         if (!Mathf.Approximately(newGrenadeRange, rangeGrenade))
         {
-            Undo.RecordObject(this, "Chỉnh Range Grenade");
+            Undo.RecordObject(this, "Edit Range Grenade");
             rangeGrenade = Mathf.Max(0f, newGrenadeRange);
             EditorUtility.SetDirty(this);
         }
 
-        Gizmos.color = new Color(0.2f, 0.85f, 1f, 0.12f);
+        Gizmos.color = new Color(0.45f, 0.50f, 0.28f, 0.12f);
         Gizmos.DrawSphere(transform.position, rangeGrenade);
-        Gizmos.color = new Color(0.2f, 0.85f, 1f, 0.9f);
+        Gizmos.color = new Color(0.45f, 0.50f, 0.28f, 0.9f);
         Gizmos.DrawWireSphere(transform.position, rangeGrenade);
     }
 #endif

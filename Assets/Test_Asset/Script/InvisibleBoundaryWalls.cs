@@ -4,7 +4,7 @@ using UnityEditor;
 #endif
 
 /// <summary>
-/// Tạo 4 tường BoxCollider vô hình quanh mặt đất (Plane) để chặn Player ra ngoài.
+/// Creates 4 invisible BoxCollider walls around the ground Plane to keep the Player in bounds.
 /// </summary>
 public class InvisibleBoundaryWalls : MonoBehaviour
 {
@@ -74,7 +74,7 @@ public class InvisibleBoundaryWalls : MonoBehaviour
         float width = bounds.size.x;
         float depth = bounds.size.z;
 
-        // Bốn cạnh: N/S dài theo X, E/W dài theo Z (cộng thickness để khớp góc).
+        // Four sides: N/S stretch along X, E/W along Z (add thickness so corners meet).
         SetupWall(root, "Wall_North",
             new Vector3(bounds.center.x, centerY, bounds.max.z + halfT),
             new Vector3(width + _wallThickness, _wallHeight, _wallThickness));

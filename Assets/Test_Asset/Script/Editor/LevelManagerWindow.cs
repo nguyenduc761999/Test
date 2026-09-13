@@ -3,7 +3,7 @@ using UnityEditorInternal;
 using UnityEngine;
 
 /// <summary>
-/// Test Manager → Level Manager: quản lý LevelConfig (thêm/xóa, timeSpawn + list zombie prefab).
+/// Test Manager → Level Manager: manage LevelConfig (add/remove, timeSpawn + zombie prefab list).
 /// </summary>
 public class LevelManagerWindow : EditorWindow
 {
@@ -38,7 +38,7 @@ public class LevelManagerWindow : EditorWindow
 
         if (_levelConfig == null)
         {
-            EditorGUILayout.HelpBox("Chưa gán LevelConfig. Gán hoặc tạo mới phía trên.", MessageType.Warning);
+            EditorGUILayout.HelpBox("No LevelConfig assigned. Assign or create one above.", MessageType.Warning);
             return;
         }
 
@@ -136,7 +136,7 @@ public class LevelManagerWindow : EditorWindow
             SerializedProperty element = listProp.GetArrayElementAtIndex(index);
             SerializedProperty prefabsProp = element.FindPropertyRelative("_zombiePrefabs");
             int prefabCount = prefabsProp != null ? prefabsProp.arraySize : 0;
-            // time + header list + rows + nút add + padding
+            // time + list header + rows + add button + padding
             return BaseElementHeight + PrefabRowHeight * (prefabCount + 2) + 28f;
         };
 
@@ -164,7 +164,7 @@ public class LevelManagerWindow : EditorWindow
 
         float y = rect.y;
 
-        // Hàng 1: Level index + Delete
+        // Row 1: Level index + Delete
         Rect titleRect = new Rect(rect.x, y, rect.width - buttonW - gap, line);
         EditorGUI.LabelField(titleRect, $"Level {index}", EditorStyles.boldLabel);
         Rect deleteRect = new Rect(rect.x + rect.width - buttonW, y, buttonW, line);
@@ -172,14 +172,14 @@ public class LevelManagerWindow : EditorWindow
             TryDeleteLevel(listProp, index);
         y += line + gap;
 
-        // Hàng 2: Time Spawn Zombie
+        // Row 2: Time Spawn Zombie
         Rect timeLabelRect = new Rect(rect.x, y, labelW, line);
         Rect timeFieldRect = new Rect(timeLabelRect.xMax + gap, y, rect.width - labelW - gap, line);
         EditorGUI.LabelField(timeLabelRect, "Time Spawn");
         timeProp.floatValue = Mathf.Max(0f, EditorGUI.FloatField(timeFieldRect, timeProp.floatValue));
         y += line + gap;
 
-        // Hàng 3: Play Time (giây)
+        // Row 3: Play Time (seconds)
         Rect playLabelRect = new Rect(rect.x, y, labelW, line);
         Rect playFieldRect = new Rect(playLabelRect.xMax + gap, y, rect.width - labelW - gap, line);
         EditorGUI.LabelField(playLabelRect, "Play Time (s)");
@@ -187,7 +187,7 @@ public class LevelManagerWindow : EditorWindow
             playTimeProp.floatValue = Mathf.Max(0f, EditorGUI.FloatField(playFieldRect, playTimeProp.floatValue));
         y += line + gap;
 
-        // Hàng 4+: List zombie prefab
+        // Row 4+: zombie prefab list
         EditorGUI.LabelField(new Rect(rect.x, y, rect.width, line), "Zombie Prefabs");
         y += line + 2f;
 
@@ -225,7 +225,7 @@ public class LevelManagerWindow : EditorWindow
     {
         bool confirmed = EditorUtility.DisplayDialog(
             "Delete Level",
-            $"Xóa Level {index} khỏi LevelConfig?",
+            $"Delete Level {index} from LevelConfig?",
             "Delete",
             "Cancel");
 

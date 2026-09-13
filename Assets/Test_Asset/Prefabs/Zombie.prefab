@@ -2495,8 +2495,8 @@ MonoBehaviour:
   walk: 0
   run: 0
   animController: {fileID: 0}
-  walkSpeed: 1
-  runSpeed: 4
+  walkSpeed: 2
+  runSpeed: 3.5
   rangeAttackPlayer: 1.5
   health: 0
   hitVFX: {fileID: 3494511883457030165, guid: 4a51f792e1f2e4a41b9b8497efd7b891, type: 3}

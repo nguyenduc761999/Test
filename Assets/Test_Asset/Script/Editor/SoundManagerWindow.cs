@@ -366,7 +366,7 @@ public class SoundManagerWindow : EditorWindow
 }
 
 /// <summary>
-/// Dropdown chọn tên SFX từ SoundConfig (_soundConfig) trên cùng object.
+/// Dropdown that picks an SFX name from SoundConfig (_soundConfig) on the same object.
 /// </summary>
 [CustomPropertyDrawer(typeof(SfxSoundAttribute))]
 public class SfxSoundDrawer : PropertyDrawer

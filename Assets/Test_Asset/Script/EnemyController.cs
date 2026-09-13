@@ -17,11 +17,11 @@ public class EnemyController : MonoBehaviour
     [HideInInspector] public Animator animController;
 
     public float walkSpeed = 2f;
-    public float runSpeed = 4f;
-    public float rangeAttackPlayer = 2f;
+    public float runSpeed = 3.5f;
+    public float rangeAttackPlayer = 1.5f;
     public float health;
 
-    /// <summary>VFX khi bị đạn trúng — spawn tại vị trí Enemy, xoay ngược hướng tấn công.</summary>
+    /// <summary>VFX on bullet hit — spawn at the Enemy position, rotated opposite the attack direction.</summary>
     [SerializeField] GameObject hitVFX;
 
     [SerializeField] float _ragdollWaitSeconds = 2f;
@@ -45,7 +45,8 @@ public class EnemyController : MonoBehaviour
     static readonly int WalkHash = Animator.StringToHash("Walk");
     static readonly int RunHash = Animator.StringToHash("Run");
     const string ZombieAttackStateName = "ZombieAttack";
-    // Góc vàng → phân tán slot quanh player không trùng hướng
+    const string ZombieIdleStateName = "Zombie Idle";
+    // Golden-angle slots around the player so chase headings do not overlap
     const float ChaseSlotGoldenAngleDegrees = 137.508f;
 
     static int _nextChaseSlot;
@@ -59,6 +60,7 @@ public class EnemyController : MonoBehaviour
     Renderer[] _renderers;
     Material[] _dissolveMaterials;
     bool _isDead;
+    bool _frozen;
     float _destinationTimer;
     bool _hasWalkParam;
     bool _hasRunParam;
@@ -66,7 +68,7 @@ public class EnemyController : MonoBehaviour
 
     void Awake()
     {
-        // Cache Animator, NavMeshAgent và Rigidbody ragdoll trên xương
+        // Cache Animator, NavMeshAgent, and ragdoll Rigidbodies on bones
         if (animController == null)
             animController = GetComponentInChildren<Animator>();
         _agent = GetComponent<NavMeshAgent>();
@@ -77,12 +79,12 @@ public class EnemyController : MonoBehaviour
         IgnoreRagdollSelfCollision();
         SetRagdollKinematic(true);
 
-        // A: radius / avoidance / priority lệch nhau
+        // A: offset radius / avoidance / priority so agents differ
         ConfigureAgentAvoidance();
-        // B: mỗi enemy 1 slot quanh player
+        // B: one slot around the player per enemy
         _chaseSlot = _nextChaseSlot++;
 
-        // Agent điều khiển vị trí → tắt root motion để không xung đột
+        // Agent drives position → disable root motion to avoid fighting it
         if (animController != null)
         {
             animController.applyRootMotion = false;
@@ -97,24 +99,25 @@ public class EnemyController : MonoBehaviour
         if (_dissolveShader == null)
             _dissolveShader = Shader.Find("Custom/EnemyDissolve");
 
-        // Health lấy từ EnemyConfig theo instance tương ứng
+        // Health comes from EnemyConfig for the matching instance
         ApplyHealthFromConfig();
     }
 
     void Start()
     {
-        // Random 1 trong walk/run → true, cái còn lại false
+        // Randomly pick walk or run → that one true, the other false
         bool chooseWalk = Random.value < 0.5f;
         walk = chooseWalk;
         run = !chooseWalk;
         ApplyMoveMode();
 
-        // Đặt agent đúng lên NavMesh trước khi đuổi
+        // Place the agent on the NavMesh before chasing
         EnsureOnNavMesh();
+        SoundManager.Instance?.PlaySfx(SoundConfig.SfxZombieSpawn);
     }
 
     /// <summary>
-    /// Gán health runtime từ Health của EnemyEntry tương ứng trong EnemyConfig.
+    /// Assigns runtime health from the matching EnemyEntry.Health in EnemyConfig.
     /// </summary>
     void ApplyHealthFromConfig()
     {
@@ -130,14 +133,14 @@ public class EnemyController : MonoBehaviour
 
     void ApplyMoveMode()
     {
-        // Gắn tốc độ agent theo chế độ đã random
+        // Apply agent speed for the randomly chosen mode
         if (_agent != null)
             _agent.speed = walk ? walkSpeed : runSpeed;
 
         if (animController == null)
             return;
 
-        // Parameter Animator trùng tên biến đang true
+        // Animator parameter matches the bool that is currently true
         if (_hasWalkParam)
             animController.SetBool(WalkHash, walk);
         if (_hasRunParam)
@@ -146,18 +149,21 @@ public class EnemyController : MonoBehaviour
 
     void Update()
     {
-        // Tích die = true trên Inspector → ragdoll 1 lần
+        // Ticking die = true in the Inspector → ragdoll once
         if (die && !_isDead)
             ApplyDie();
 
         if (_isDead)
             return;
 
-        // Player chết → dừng đuổi và tấn công
+        // Lose / match locked → stand still, do not chase
+        if (_frozen)
+            return;
+
+        // Player died → stop chasing and attacking
         if (_playerController == null || _playerController.IsDead)
         {
-            StopAgentMovement();
-            SetMoveAnimActive(false);
+            FreezeInPlace();
             return;
         }
 
@@ -191,7 +197,7 @@ public class EnemyController : MonoBehaviour
                 return;
         }
 
-        // Đang ZombieAttack → khóa di chuyển, lookat player, chờ hết anim mới xét lại
+        // In ZombieAttack → lock movement, look at player, wait for the anim to finish before re-evaluating
         if (IsPlayingZombieAttack())
         {
             StopAgentMovement();
@@ -200,7 +206,7 @@ public class EnemyController : MonoBehaviour
             return;
         }
 
-        // Trong rangeAttackPlayer → dừng + lookat; ngoài range mới đuổi tiếp
+        // Inside rangeAttackPlayer → stop + lookat; only chase again outside range
         if (IsPlayerInAttackRange())
         {
             StopAgentMovement();
@@ -218,7 +224,7 @@ public class EnemyController : MonoBehaviour
             return;
 
         _destinationTimer = _destinationRefreshSeconds;
-        // B: đích lệch slot quanh player, không dồn 1 điểm
+        // B: destination offset to a slot around the player, not stacked on one point
         _agent.SetDestination(GetChaseDestination());
     }
 
@@ -227,12 +233,12 @@ public class EnemyController : MonoBehaviour
         if (_agent == null)
             return;
 
-        // A: tăng bán kính né + avoidance chất lượng cao + priority random
+        // A: raise avoidance radius + high-quality avoidance + random priority
         _agent.radius = Mathf.Max(_agent.radius, _agentAvoidanceRadius);
         _agent.obstacleAvoidanceType = ObstacleAvoidanceType.HighQualityObstacleAvoidance;
         _agent.avoidancePriority = Random.Range(0, 99);
 
-        // Bắt buộc bằng rangeAttack: dừng đúng lúc vào tầm đánh
+        // Must equal rangeAttack: stop as soon as in attack range
         SyncStoppingDistanceToAttackRange();
     }
 
@@ -249,8 +255,8 @@ public class EnemyController : MonoBehaviour
         if (_player == null)
             return transform.position;
 
-        // Đích = player (không offset xa): stoppingDistance == rangeAttack → dừng đúng tầm đánh
-        // Slot chỉ lệch nhẹ quanh player để tránh dồn 1 điểm
+        // Destination = player (no far offset): stoppingDistance == rangeAttack → stop at attack range
+        // Slot is only a slight offset around the player to avoid stacking on one point
         float ringRadius = 0.05f;
         float angleRad = _chaseSlot * ChaseSlotGoldenAngleDegrees * Mathf.Deg2Rad;
         Vector3 offset = new Vector3(Mathf.Cos(angleRad), 0f, Mathf.Sin(angleRad)) * ringRadius;
@@ -283,13 +289,13 @@ public class EnemyController : MonoBehaviour
         AnimatorStateInfo current = animController.GetCurrentAnimatorStateInfo(0);
         if (current.IsName(ZombieAttackStateName))
         {
-            // Hết 1 chu kỳ attack (không còn trong transition) → coi như xong
+            // Attack cycle finished (no longer in transition) → treat as done
             if (current.normalizedTime >= 1f && !animController.IsInTransition(0))
                 return false;
             return true;
         }
 
-        // Đang blend vào ZombieAttack
+        // Blending into ZombieAttack
         if (animController.IsInTransition(0))
         {
             AnimatorStateInfo next = animController.GetNextAnimatorStateInfo(0);
@@ -309,6 +315,7 @@ public class EnemyController : MonoBehaviour
             return;
 
         animController.CrossFadeInFixedTime(ZombieAttackStateName, 0.1f, 0, 0f);
+        SoundManager.Instance?.PlaySfxAt(SoundConfig.SfxZombieAttack, transform.position);
     }
 
     void StopAgentMovement()
@@ -316,7 +323,7 @@ public class EnemyController : MonoBehaviour
         if (_agent == null || !_agent.isOnNavMesh)
             return;
 
-        // Cắt velocity ngay — run tốc độ cao nếu chỉ isStopped/ResetPath vẫn trượt thêm vài frame
+        // Zero velocity immediately — a fast run still slides a few frames if only isStopped/ResetPath is used
         _agent.velocity = Vector3.zero;
 
         if (!_agent.isStopped)
@@ -325,7 +332,7 @@ public class EnemyController : MonoBehaviour
         if (_agent.hasPath)
             _agent.ResetPath();
 
-        // Attack tự xoay → tắt xoay của agent
+        // Attack handles rotation → disable agent rotation
         SetAgentUpdateRotation(false);
     }
 
@@ -347,7 +354,7 @@ public class EnemyController : MonoBehaviour
     }
 
     /// <summary>
-    /// Xoay nhìn player nhanh nhưng mượt (RotateTowards theo độ/giây).
+    /// Turns to face the player quickly but smoothly (RotateTowards in degrees/sec).
     /// </summary>
     void FacePlayerSmooth()
     {
@@ -380,7 +387,7 @@ public class EnemyController : MonoBehaviour
         if (animController == null || _agent == null || !_agent.isOnNavMesh)
             return;
 
-        // Attack / trong range → không cập nhật walk/run theo velocity
+        // Attack / in range → do not update walk/run from velocity
         if (IsPlayingZombieAttack() || IsPlayerInAttackRange())
             return;
 
@@ -392,12 +399,12 @@ public class EnemyController : MonoBehaviour
     }
 
     /// <summary>
-    /// Animation Event: chỉ gây damage nếu player còn trong rangeAttackPlayer.
-    /// Damage lấy từ EnemyConfig tương ứng prefab.
+    /// Animation Event: apply damage only if the player is still inside rangeAttackPlayer.
+    /// Damage comes from the EnemyConfig entry for this prefab.
     /// </summary>
     public void attackPlayer()
     {
-        if (_isDead || _player == null || _playerController == null || _playerController.IsDead)
+        if (_isDead || _frozen || _player == null || _playerController == null || _playerController.IsDead)
             return;
 
         float range = Mathf.Max(0f, rangeAttackPlayer);
@@ -408,12 +415,12 @@ public class EnemyController : MonoBehaviour
         if (_enemyConfig == null)
             return;
 
-        // Damage lấy từ EnemyConfig theo prefab → trừ health PlayerController
+        // Damage from EnemyConfig by prefab → subtract PlayerController health
         _enemyConfig.AttackPlayer(_playerController, gameObject);
     }
 
     /// <summary>
-    /// Nhận damage từ đạn — trừ health; spawn hitVFX ngược hướng tấn công.
+    /// Takes bullet damage — subtract health; spawn hitVFX opposite the attack direction.
     /// </summary>
     public void TakeDamage(float damage, Transform attacker = null)
     {
@@ -429,10 +436,28 @@ public class EnemyController : MonoBehaviour
         health = Mathf.Max(0f, health - amount);
         if (health <= 0f)
             ApplyDie();
+        else
+            SoundManager.Instance?.PlaySfx(SoundConfig.SfxFleshHit);
     }
 
     /// <summary>
-    /// Chết ngay từ vụ nổ + áp lực ragdoll vừa phải (không zero velocity sau force).
+    /// Lose: stand still, disable walk/run, do not chase / do not attack.
+    /// </summary>
+    public void FreezeInPlace()
+    {
+        if (_isDead || _frozen)
+            return;
+
+        _frozen = true;
+        StopAgentMovement();
+        SetMoveAnimActive(false);
+
+        if (animController != null)
+            animController.CrossFadeInFixedTime(ZombieIdleStateName, 0.1f, 0, 0f);
+    }
+
+    /// <summary>
+    /// Die immediately from an explosion with moderate ragdoll force (do not zero velocity after force).
     /// </summary>
     public void DieFromExplosion(Vector3 explosionPos, float force, float radius, float upwardsModifier)
     {
@@ -457,7 +482,7 @@ public class EnemyController : MonoBehaviour
     }
 
     /// <summary>
-    /// Spawn hitVFX tại vị trí Enemy; hướng xoay = ngược forward của attacker (đạn).
+    /// Spawns hitVFX at the Enemy position; rotation faces opposite the attacker's (bullet) forward.
     /// </summary>
     void SpawnHitVfx(Transform attacker)
     {
@@ -496,12 +521,12 @@ public class EnemyController : MonoBehaviour
 
     void OnDrawGizmosSelected()
     {
-        // Gizmo kéo chỉnh rangeAttackPlayer trên Scene
+        // Drag gizmo to edit rangeAttackPlayer in the Scene view
         Handles.color = new Color(1f, 0.55f, 0.1f, 0.9f);
         float newRange = Handles.RadiusHandle(Quaternion.identity, transform.position, Mathf.Max(0f, rangeAttackPlayer));
         if (!Mathf.Approximately(newRange, rangeAttackPlayer))
         {
-            Undo.RecordObject(this, "Chỉnh Range Attack Player");
+            Undo.RecordObject(this, "Edit Range Attack Player");
             rangeAttackPlayer = Mathf.Max(0f, newRange);
             if (_agent == null)
                 _agent = GetComponent<NavMeshAgent>();
@@ -545,22 +570,23 @@ public class EnemyController : MonoBehaviour
             if (rb == null)
                 continue;
 
-            // Xóa vận tốc dư trước khi đổi trạng thái (tránh văng)
+            // Clear leftover velocity before changing state (avoids launch)
             rb.linearVelocity = Vector3.zero;
             rb.angularVelocity = Vector3.zero;
             rb.isKinematic = kinematic;
         }
     }
 
-    void ApplyDie()
+    public void ApplyDie()
     {
         if (_isDead)
             return;
 
         _isDead = true;
         die = true;
+        SoundManager.Instance?.PlaySfxAt(SoundConfig.SfxZombieDie, transform.position);
 
-        // Tắt tìm đường trước khi ragdoll
+        // Disable pathfinding before ragdoll
         if (_agent != null)
         {
             if (_agent.isOnNavMesh)
@@ -573,11 +599,11 @@ public class EnemyController : MonoBehaviour
         if (_hasRunParam && animController != null)
             animController.SetBool(RunHash, false);
 
-        // Tắt Animator để physics điều khiển xương
+        // Disable Animator so physics drives the bones
         if (animController != null)
             animController.enabled = false;
 
-        // Tắt collider gốc (tránh đụng capsule xương → văng)
+        // Disable the root collider (avoids hitting bone capsules → launch)
         if (_rootColliders != null)
         {
             for (int i = 0; i < _rootColliders.Length; i++)
@@ -587,10 +613,10 @@ public class EnemyController : MonoBehaviour
             }
         }
 
-        // Bật ragdoll (xóa vận tốc dư trước khi physics)
+        // Enable ragdoll (clear leftover velocity before physics)
         SetRagdollKinematic(false);
 
-        // Chờ ragdoll rồi dissolve → Destroy
+        // Wait for ragdoll, then dissolve → Destroy
         DissolveAfterDieAsync();
     }
 
@@ -674,7 +700,7 @@ public class EnemyController : MonoBehaviour
         if (source == null || dissolveMat == null)
             return;
 
-        // Giữ texture/màu gốc của zombie
+        // Keep the zombie's original texture/color
         if (source.HasProperty(BaseMapId))
             dissolveMat.SetTexture(BaseMapId, source.GetTexture(BaseMapId));
         else if (source.HasProperty(MainTexId))
@@ -734,7 +760,7 @@ public class EnemyController : MonoBehaviour
 
     void CacheRootColliders()
     {
-        // Collider gắn trực tiếp root (không phải xương ragdoll)
+        // Collider attached directly to root (not a ragdoll bone)
         Collider[] all = GetComponents<Collider>();
         int count = 0;
         for (int i = 0; i < all.Length; i++)
@@ -757,7 +783,7 @@ public class EnemyController : MonoBehaviour
 
     void IgnoreRagdollSelfCollision()
     {
-        // Collider xương chồng nhau → PhysX đẩy mạnh khi bật ragdoll
+        // Overlapping bone colliders → PhysX pushes hard when ragdoll enables
         if (_ragdollColliders == null)
             return;
 
@@ -780,7 +806,7 @@ public class EnemyController : MonoBehaviour
 
     void OnDestroy()
     {
-        // Hủy material instance để tránh leak
+        // Destroy material instances to avoid leaks
         if (_dissolveMaterials == null)
             return;
 

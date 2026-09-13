@@ -4,7 +4,7 @@ using UnityEngine;
 using UnityEngine.Scripting;
 
 /// <summary>
-/// Một loại enemy: prefab + damage + health.
+/// One enemy type: prefab + damage + health.
 /// </summary>
 [Serializable]
 [Preserve]
@@ -34,7 +34,7 @@ public class EnemyEntry
 }
 
 /// <summary>
-/// Danh sách cấu hình enemy — thêm/xóa phần tử trên Inspector hoặc qua EnemyManager.
+/// Enemy config list — add/remove entries in the Inspector or via EnemyManager.
 /// </summary>
 [CreateAssetMenu(fileName = "EnemyConfig", menuName = "Test/Enemy Config", order = 3)]
 [Preserve]
@@ -45,7 +45,7 @@ public class EnemyConfig : ScriptableObject
     public List<EnemyEntry> Enemies => _enemies;
 
     /// <summary>
-    /// Thêm một enemy vào danh sách.
+    /// Adds an enemy to the list.
     /// </summary>
     public EnemyEntry Add(GameObject prefab, float damage, float health = 100f)
     {
@@ -63,7 +63,7 @@ public class EnemyConfig : ScriptableObject
     }
 
     /// <summary>
-    /// Xóa phần tử theo chỉ số.
+    /// Removes an entry by index.
     /// </summary>
     public bool RemoveAt(int index)
     {
@@ -75,7 +75,7 @@ public class EnemyConfig : ScriptableObject
     }
 
     /// <summary>
-    /// Tìm theo prefab (so khớp reference).
+    /// Finds by prefab (reference match).
     /// </summary>
     public EnemyEntry FindByPrefab(GameObject prefab)
     {
@@ -93,7 +93,7 @@ public class EnemyConfig : ScriptableObject
     }
 
     /// <summary>
-    /// Tìm theo instance spawn (khớp tên prefab, bỏ hậu tố Clone).
+    /// Finds by spawned instance (prefab name match, strips the Clone suffix).
     /// </summary>
     public EnemyEntry FindByInstance(GameObject instance)
     {
@@ -128,7 +128,7 @@ public class EnemyConfig : ScriptableObject
     }
 
     /// <summary>
-    /// Gây damage lên player — trừ health của PlayerController theo Damage của enemy instance.
+    /// Damages the player — subtracts PlayerController health using this enemy instance's Damage.
     /// </summary>
     public void AttackPlayer(PlayerController player, GameObject enemyInstance)
     {
@@ -139,7 +139,7 @@ public class EnemyConfig : ScriptableObject
         if (entry == null)
             return;
 
-        // Truyền transform Zombie để Player spawn hitVFX ngược hướng tấn công
+        // Pass the Zombie transform so the Player can spawn hitVFX opposite the attack direction
         player.TakeDamage(entry.Damage, enemyInstance.transform);
     }
 }

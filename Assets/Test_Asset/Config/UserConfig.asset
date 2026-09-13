@@ -1,0 +1,25 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: f950c58da5320d6458fa616365c0e545, type: 3}
+  m_Name: UserConfig
+  m_EditorClassIdentifier: Assembly-CSharp::UserConfig
+  currentScore: 0
+  highScore: 0
+  currentLevel: 0
+  level: 1
+  health: 100
+  WeaponUse: 0
+  Inventory:
+  - {fileID: 4859412340073700362, guid: f9c87c3d304dcab40bb344f08214b88a, type: 3}
+  - {fileID: 2559746148873707959, guid: 2583097f26bf75949b266dcbee96f998, type: 3}
+  - {fileID: 3627888253766354257, guid: 34cafd5440a3db94c95f508973490887, type: 3}
+  grenade: {fileID: 1415556611663978, guid: 216ec6e5fef3e254d86b21071e614d66, type: 3}

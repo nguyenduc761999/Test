@@ -6,7 +6,7 @@ using UnityEditor;
 #endif
 
 /// <summary>
-/// ControlPanel: đổi súng theo Inventory + aim/ném lựu đạn kiểu Liên Quân.
+/// ControlPanel: switch guns from Inventory + Arena-of-Valor-style grenade aim/throw.
 /// </summary>
 public class ControlPanelManager : MonoBehaviour
 {
@@ -14,6 +14,7 @@ public class ControlPanelManager : MonoBehaviour
     [SerializeField] Button grenadeBtn;
     [SerializeField] UserConfig _userConfig;
     [SerializeField] WeaponConfig _weaponConfig;
+    [SerializeField] SoundConfig _soundConfig;
     [SerializeField] PlayerController _playerController;
 
     Image _iconGun;
@@ -26,11 +27,12 @@ public class ControlPanelManager : MonoBehaviour
     const string SwitchWeaponBtnName = "SwitchWeaponBtn";
     const string GrenadeBtnName = "GrenadeBtn";
     const string IconGunName = "IconGun";
-    /// <summary>Kéo đủ pixel này = ném max rangeGrenade (kiểu Liên Quân).</summary>
+    /// <summary>Dragging this many pixels = throw at max rangeGrenade (Arena of Valor style).</summary>
     const float MaxDragPixels = 140f;
 #if UNITY_EDITOR
     const string UserConfigAssetPath = "Assets/Test_Asset/Config/UserConfig.asset";
     const string WeaponConfigAssetPath = "Assets/Test_Asset/Config/WeaponConfig.asset";
+    const string SoundConfigAssetPath = "Assets/Test_Asset/Config/SoundConfig.asset";
 #endif
 
     void Awake()
@@ -40,6 +42,9 @@ public class ControlPanelManager : MonoBehaviour
 
         CacheIconGun();
         CacheUiCamera();
+
+        if (_soundConfig != null)
+            SoundManager.Ensure(_soundConfig);
 
         if (switchWeaponBtn != null)
             switchWeaponBtn.onClick.AddListener(SwitchWeapon);
@@ -65,7 +70,7 @@ public class ControlPanelManager : MonoBehaviour
         if (grenadeBtn == null)
             return;
 
-        // Button/Selectable gửi Cancel khi kéo → phá aim. Tắt Button, giữ Image raycast.
+        // Button/Selectable sends Cancel on drag, which cancels aim. Disable Button, keep Image raycast.
         grenadeBtn.transition = Selectable.Transition.None;
         grenadeBtn.enabled = false;
 
@@ -78,7 +83,7 @@ public class ControlPanelManager : MonoBehaviour
             _grenadeTrigger = grenadeBtn.gameObject.AddComponent<EventTrigger>();
 
         _grenadeTrigger.triggers.Clear();
-        // Không gắn Cancel — Selectable/Button Cancel làm mất drag ngay khi kéo
+        // Do not bind Cancel — Selectable/Button Cancel drops the drag as soon as you start dragging
         AddTrigger(EventTriggerType.PointerDown, OnGrenadePointerDown);
         AddTrigger(EventTriggerType.InitializePotentialDrag, OnGrenadeInitializePotentialDrag);
         AddTrigger(EventTriggerType.BeginDrag, OnGrenadeDrag);
@@ -104,7 +109,7 @@ public class ControlPanelManager : MonoBehaviour
 
     void OnGrenadeInitializePotentialDrag(BaseEventData eventData)
     {
-        // Cho phép kéo ngay, không chờ threshold mặc định của EventSystem
+        // Allow drag immediately, skip EventSystem's default threshold
         if (eventData is PointerEventData pointer)
             pointer.useDragThreshold = false;
     }
@@ -121,6 +126,7 @@ public class ControlPanelManager : MonoBehaviour
         pointer.useDragThreshold = false;
 
         _playerController.BeginGrenadeAim();
+        SoundManager.Instance?.PlayButton(SoundConfig.ButtonClick);
         ApplyDragAim(pointer.position);
     }
 
@@ -143,7 +149,7 @@ public class ControlPanelManager : MonoBehaviour
         if (eventData is PointerEventData pointer && pointer.pointerId != _grenadePointerId)
             return;
 
-        // Cập nhật aim lần cuối rồi ném
+        // Update aim one last time, then throw
         if (eventData is PointerEventData upPointer)
             ApplyDragAim(upPointer.position);
 
@@ -191,10 +197,12 @@ public class ControlPanelManager : MonoBehaviour
     }
 
     /// <summary>
-    /// Xoay vòng WeaponUse → Save → IconGun → Player đổi súng.
+    /// Cycles WeaponUse → Save → IconGun → Player swaps gun.
     /// </summary>
     void SwitchWeapon()
     {
+        SoundManager.Instance?.PlayButton(SoundConfig.ButtonClick);
+
         if (_userConfig == null || _userConfig.Inventory == null)
             return;
 
@@ -208,10 +216,11 @@ public class ControlPanelManager : MonoBehaviour
 
         RefreshIconGun();
         _playerController?.EquipInventoryWeapon();
+        SoundManager.Instance?.PlaySfx(SoundConfig.SfxWeaponSwitch);
     }
 
     /// <summary>
-    /// Gán sprite IconGun theo weapon đang WeaponUse.
+    /// Assigns the IconGun sprite from the currently WeaponUse weapon.
     /// </summary>
     void RefreshIconGun()
     {
@@ -300,6 +309,8 @@ public class ControlPanelManager : MonoBehaviour
             _userConfig = AssetDatabase.LoadAssetAtPath<UserConfig>(UserConfigAssetPath);
         if (_weaponConfig == null)
             _weaponConfig = AssetDatabase.LoadAssetAtPath<WeaponConfig>(WeaponConfigAssetPath);
+        if (_soundConfig == null)
+            _soundConfig = AssetDatabase.LoadAssetAtPath<SoundConfig>(SoundConfigAssetPath);
     }
 #endif
 }
